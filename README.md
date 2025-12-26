@@ -66,7 +66,8 @@ HEVY_API_KEY=your_long_api_key_here
 # Example for Google Drive users:
 SAVE_PATH=G:\My Drive\Gemini Gems\Personal trainer
 # Example for local users:
-# SAVE_PATH=C:\Users\Brian\Documents\FitnessData
+# SAVE_PATH=C:\Users\User\Documents\FitnessData
+
 🏃‍♂️ First Run & Authentication
 1. Login to Garmin
 Garmin requires a one-time secure login to generate session tokens. Run this command:
