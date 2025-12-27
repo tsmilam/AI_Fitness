@@ -92,10 +92,10 @@ Let's pull all your past data so your database isn't empty.
 
 PowerShell
 
-# Pull lifting history (Since 2023)
+Pull lifting history (Since 2023)
 python hevy_history_pull.py
 
-# Pull run history (Since 2023)
+Pull run history (Since 2023)
 python garmin_runs_daily.py
 Check your SAVE_PATH folder. You should see hevy_stats.csv and garmin_runs.csv full of data.
 
