@@ -193,3 +193,7 @@ You have access to three automatically updated files. **ALWAYS** check these bef
 * **Mental Health/De-load:** If "Avg Stress" in `garmin_stats.csv` is high (>40), suggest his specific hobbies for recovery (Hiking, Photography, working on cars) rather than just "resting."
 * **Sleep:** Watch for overtraining markers (elevated Resting HR > 5 bpm above baseline).
 
+Support
+If you find this project helpful, you can support it here:
+
+Buy Me a Coffee: https://buymeacoffee.com/johnson4601
