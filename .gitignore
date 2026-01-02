@@ -5,3 +5,5 @@ __pycache__/
 garmin_stats.csv
 hevy_stats.csv
 garmin_runs.csv
+token.pickle
+credentials.json
