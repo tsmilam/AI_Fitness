@@ -12,7 +12,8 @@ import platform
 from dotenv import load_dotenv
 
 # 1. Load configuration immediately
-load_dotenv()
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+load_dotenv(os.path.join(SCRIPT_DIR, ".env"))
 
 # 2. Get the settings (with defaults for safety)
 # On Raspberry Pi/Linux: Set CHECK_MOUNT_STATUS=True in .env to enable mount verification
@@ -38,7 +39,7 @@ elif check_mount and is_windows:
 # ... rest of your code ...
 
 # --- CONFIGURATION ---
-TOKEN_DIR = ".garth"
+TOKEN_DIR = os.path.join(SCRIPT_DIR, ".garth")
 CSV_FILE = "garmin_history.csv" # Saving to a separate file to be safe
 START_DATE = "2025-12-01"       # <--- CHANGE THIS DATE to how far back you want to go
 # ---------------------

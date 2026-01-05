@@ -10,11 +10,10 @@ import time
 from dotenv import load_dotenv
 
 # 1. Load configuration
-load_dotenv()
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+load_dotenv(os.path.join(SCRIPT_DIR, ".env"))
 
 # 2. Platform-Aware Safety Check
-# On Raspberry Pi/Linux: Set CHECK_MOUNT_STATUS=True in .env to enable mount verification
-# On Windows: Mount check is automatically skipped (unless explicitly enabled)
 check_mount = os.getenv("CHECK_MOUNT_STATUS", "False").lower() == "true"
 drive_path = os.getenv("DRIVE_MOUNT_PATH", "/home/pi/google_drive")
 is_windows = platform.system() == "Windows"
@@ -31,10 +30,12 @@ elif check_mount and is_windows:
     print("Note: Mount check skipped on Windows (not applicable).")
 
 # --- CONFIGURATION ---
-TOKEN_DIR = ".garth"
+TOKEN_DIR = os.path.join(SCRIPT_DIR, ".garth")
 SAVE_PATH = os.getenv("SAVE_PATH")
-CSV_FILE = os.path.join(SAVE_PATH, "garmin_runs.csv") if SAVE_PATH else "garmin_runs.csv"
-START_DATE = "2023-01-01" 
+# Rename output file to reflect broader scope
+CSV_FILE = os.path.join(SAVE_PATH, "garmin_cardio.csv") if SAVE_PATH else "garmin_cardio.csv"
+# Updated Start Date
+START_DATE = "2025-12-01" 
 # ---------------------
 
 def main():
@@ -47,7 +48,7 @@ def main():
     except:
         pass
 
-    print(f"2. Fetching runs from {START_DATE}...")
+    print(f"2. Fetching cardio activities (Cycling/Running/etc) from {START_DATE}...")
 
     # Ensure folder exists
     folder_path = os.path.dirname(CSV_FILE)
@@ -61,7 +62,7 @@ def main():
              "Date", "Time", "activityName", "activityType_typeKey", 
              "duration", "elapsedDuration", "movingDuration", 
              "averageSpeed", "averageHR", "maxHR", "steps", 
-             "summarizedExerciseSets", "totalSets", "activeSets", "totalReps", 
+             "totalAscent", "totalDescent", "distance", # Added useful cardio metrics
              "trainingEffectLabel", "activityTrainingLoad", "minActivityLapDuration", 
              "hrTimeInZone_1", "hrTimeInZone_2", "hrTimeInZone_3", "hrTimeInZone_4"
         ])
@@ -78,18 +79,23 @@ def main():
         print(f"   Processing {current} to {chunk_end}...", end="", flush=True)
         
         try:
-            activities = api.get_activities_by_date(current.isoformat(), chunk_end.isoformat(), "running")
+            # Passing "" as the activity type fetches ALL activities (Cycling, Running, etc.)
+            activities = api.get_activities_by_date(current.isoformat(), chunk_end.isoformat(), "")
             
             new_rows = []
             if activities:
                 for act in activities:
+                    # Filter for Cardio-ish types if needed, or keep all. 
+                    # For now, we keep all as requested ("any cardio activity")
+                    # Common types: 'cycling', 'running', 'lap_swimming', 'cardio'
+                    
                     start_local = act.get('startTimeLocal', '')
                     date_str = start_local[:10]
                     time_str = start_local[11:]
                     
                     # Extract Data
-                    title = act.get('activityName', 'Run')
-                    atype_key = act.get('activityType', {}).get('typeKey', 'running')
+                    title = act.get('activityName', 'Activity')
+                    atype_key = act.get('activityType', {}).get('typeKey', 'unknown')
                     
                     dur = act.get('duration', 0)
                     elapsed = act.get('elapsedDuration', 0)
@@ -99,11 +105,10 @@ def main():
                     max_hr = act.get('maxHR')
                     steps = act.get('steps')
                     
-                    # Sets/Reps (JSON dump complex lists)
-                    summ_sets = json.dumps(act.get('summarizedExerciseSets', []))
-                    t_sets = act.get('totalSets')
-                    a_sets = act.get('activeSets')
-                    t_reps = act.get('totalReps')
+                    # Elevation / Distance (Useful for cycling)
+                    ascent = act.get('elevationGain', 0)
+                    descent = act.get('elevationLoss', 0)
+                    dist = act.get('distance', 0)
                     
                     te_lbl = act.get('trainingEffectLabel')
                     load = act.get('activityTrainingLoad')
@@ -118,7 +123,7 @@ def main():
                     new_rows.append([
                         date_str, time_str, title, atype_key,
                         dur, elapsed, moving, avg_spd, avg_hr, max_hr, steps,
-                        summ_sets, t_sets, a_sets, t_reps,
+                        ascent, descent, dist,
                         te_lbl, load, min_lap, z1, z2, z3, z4
                     ])
             
@@ -138,7 +143,7 @@ def main():
         current = chunk_end + timedelta(days=1)
         time.sleep(1) 
 
-    print(f"--- COMPLETE. Saved {total_saved} records. ---")
+    print(f"--- COMPLETE. Saved {total_saved} records to {CSV_FILE} ---")
 
 if __name__ == "__main__":
     main()
