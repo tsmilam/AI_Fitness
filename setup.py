@@ -442,19 +442,47 @@ def run_initial_imports():
     print_info("This pulls your past workout and health data.")
     print()
 
+    if not ask_yes_no("Run any history imports?", default=False):
+        return
+
+    # Ask for start date
+    print()
+    print_info("How far back should we import data?")
+    print_info("Enter a date in YYYY-MM-DD format (e.g., 2023-01-01)")
+    print()
+
+    from datetime import datetime, timedelta
+    default_date = (datetime.now() - timedelta(days=365)).strftime("%Y-%m-%d")
+    start_date = ask_input("Start date", default_date)
+
+    # Validate date format
+    try:
+        datetime.strptime(start_date, "%Y-%m-%d")
+    except ValueError:
+        print_error(f"Invalid date format: {start_date}. Using default: {default_date}")
+        start_date = default_date
+
+    print()
     script_dir = get_script_dir()
 
     if ask_yes_no("Import Hevy workout history?", default=False):
-        print_info("Running Hevy history import...")
+        print_info(f"Running Hevy history import from {start_date}...")
         try:
-            subprocess.run([sys.executable, str(script_dir / "history_hevy_import.py")])
+            subprocess.run([sys.executable, str(script_dir / "history_hevy_import.py"), start_date])
         except Exception as e:
             print_error(f"Failed: {e}")
 
     if ask_yes_no("Import Garmin health history?", default=False):
-        print_info("Running Garmin history import...")
+        print_info(f"Running Garmin health history import from {start_date}...")
         try:
-            subprocess.run([sys.executable, str(script_dir / "history_garmin_import.py")])
+            subprocess.run([sys.executable, str(script_dir / "history_garmin_import.py"), start_date])
+        except Exception as e:
+            print_error(f"Failed: {e}")
+
+    if ask_yes_no("Import Garmin runs history?", default=False):
+        print_info(f"Running Garmin runs history import from {start_date}...")
+        try:
+            subprocess.run([sys.executable, str(script_dir / "history_garmin_runs.py"), start_date])
         except Exception as e:
             print_error(f"Failed: {e}")
 

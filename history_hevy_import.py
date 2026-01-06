@@ -51,8 +51,17 @@ else:
     print("WARNING: SAVE_PATH not set in .env. Using current folder.")
     CSV_FILE = "hevy_stats.csv"
 
-# Optional: You can change this here, or add START_YEAR to .env if you prefer
-START_YEAR = 2023 
+# Accept start date from command line argument (e.g., python history_hevy_import.py 2023-01-01)
+DEFAULT_START_DATE = "2023-01-01"
+if len(sys.argv) > 1:
+    START_DATE = sys.argv[1]
+    print(f"Using command-line start date: {START_DATE}")
+else:
+    START_DATE = DEFAULT_START_DATE
+
+# Extract year for API filtering, but also use full date for precise filtering
+START_YEAR = int(START_DATE.split('-')[0])
+START_DATE_OBJ = datetime.fromisoformat(START_DATE)
 # -------------------------------------
 
 def main():
@@ -124,9 +133,9 @@ def main():
 
                 w_dt = datetime.fromisoformat(w_date_str).replace(tzinfo=None)
                 
-                # Check Year Limit
-                if w_dt.year < START_YEAR:
-                    print(f"\nReached {w_dt.year}. Stopping.")
+                # Check Date Limit (stop if before start date)
+                if w_dt < START_DATE_OBJ:
+                    print(f"\nReached {w_dt.date()}. Stopping (before {START_DATE}).")
                     keep_going = False
                     break
                 

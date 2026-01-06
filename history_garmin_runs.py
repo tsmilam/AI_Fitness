@@ -34,7 +34,14 @@ elif check_mount and is_windows:
 TOKEN_DIR = ".garth"
 SAVE_PATH = os.getenv("SAVE_PATH")
 CSV_FILE = os.path.join(SAVE_PATH, "garmin_runs.csv") if SAVE_PATH else "garmin_runs.csv"
-START_DATE = "2023-01-01" 
+DEFAULT_START_DATE = "2024-08-08"
+
+# Accept start date from command line argument (e.g., python history_garmin_runs.py 2023-01-01)
+if len(sys.argv) > 1:
+    START_DATE = sys.argv[1]
+    print(f"Using command-line start date: {START_DATE}")
+else:
+    START_DATE = DEFAULT_START_DATE
 # ---------------------
 
 def main():

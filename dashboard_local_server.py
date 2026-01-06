@@ -1045,6 +1045,66 @@ with tab3:
 
     st.markdown("---")
 
+    # History Import Section
+    st.header("History Import")
+    st.caption("Import historical data from Garmin and Hevy. Select a start date and run the imports.")
+
+    # Date picker for history import
+    history_col1, history_col2 = st.columns([1, 2])
+
+    with history_col1:
+        history_start_date = st.date_input(
+            "Start Date",
+            value=datetime.now().date() - timedelta(days=365),
+            max_value=datetime.now().date(),
+            key="history_start_date",
+            help="Import data from this date forward"
+        )
+
+    with history_col2:
+        st.markdown(f"**Selected:** {history_start_date.isoformat()}")
+        st.caption("Data will be imported from this date to yesterday.")
+
+    # History import buttons
+    hist_col1, hist_col2, hist_col3, hist_col4 = st.columns(4)
+
+    history_date_str = history_start_date.isoformat()
+
+    with hist_col1:
+        if st.button("Import Garmin Health", key="run_history_garmin"):
+            cmd = f"cd {PROJECT_DIR} && /usr/bin/python3 history_garmin_import.py {history_date_str} >> {LOG_FILE} 2>&1"
+            subprocess.Popen(cmd, shell=True)
+            st.toast(f"Started: Garmin Health History (from {history_date_str})")
+            st.success("Garmin Health import started! Check logs for progress.")
+
+    with hist_col2:
+        if st.button("Import Garmin Runs", key="run_history_runs"):
+            cmd = f"cd {PROJECT_DIR} && /usr/bin/python3 history_garmin_runs.py {history_date_str} >> {LOG_FILE} 2>&1"
+            subprocess.Popen(cmd, shell=True)
+            st.toast(f"Started: Garmin Runs History (from {history_date_str})")
+            st.success("Garmin Runs import started! Check logs for progress.")
+
+    with hist_col3:
+        if st.button("Import Hevy Workouts", key="run_history_hevy"):
+            cmd = f"cd {PROJECT_DIR} && /usr/bin/python3 history_hevy_import.py {history_date_str} >> {LOG_FILE} 2>&1"
+            subprocess.Popen(cmd, shell=True)
+            st.toast(f"Started: Hevy History (from {history_date_str})")
+            st.success("Hevy Workouts import started! Check logs for progress.")
+
+    with hist_col4:
+        if st.button("Run All Imports", type="primary", key="run_all_history"):
+            # Run all three imports
+            cmd1 = f"cd {PROJECT_DIR} && /usr/bin/python3 history_garmin_import.py {history_date_str} >> {LOG_FILE} 2>&1"
+            cmd2 = f"cd {PROJECT_DIR} && /usr/bin/python3 history_garmin_runs.py {history_date_str} >> {LOG_FILE} 2>&1"
+            cmd3 = f"cd {PROJECT_DIR} && /usr/bin/python3 history_hevy_import.py {history_date_str} >> {LOG_FILE} 2>&1"
+            subprocess.Popen(cmd1, shell=True)
+            subprocess.Popen(cmd2, shell=True)
+            subprocess.Popen(cmd3, shell=True)
+            st.toast(f"Started: All History Imports (from {history_date_str})")
+            st.success("All imports started! Check logs for progress.")
+
+    st.markdown("---")
+
     # System Vitals
     st.header("System Vitals")
 

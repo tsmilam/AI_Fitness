@@ -212,7 +212,31 @@ def main():
         except Exception as e:
             print(f"HRV fetch error: {e}")
 
-        # 6. Activities
+        # 6. Blood Pressure
+        bp_systolic, bp_diastolic = None, None
+        try:
+            if hasattr(api, 'get_blood_pressure'):
+                bp_data = api.get_blood_pressure(today)
+            else:
+                bp_data = api.connectapi(f"/bloodpressure/{today}")
+
+            if bp_data:
+                summaries = get_safe(bp_data, 'measurementSummaries')
+                if summaries and len(summaries) > 0:
+                    # Try to get from measurements array first (most accurate)
+                    measurements = get_safe(summaries[0], 'measurements')
+                    if measurements and len(measurements) > 0:
+                        bp_systolic = get_safe(measurements[0], 'systolic')
+                        bp_diastolic = get_safe(measurements[0], 'diastolic')
+
+                    # Fallback to summary high values
+                    if bp_systolic is None:
+                        bp_systolic = get_safe(summaries[0], 'highSystolic')
+                        bp_diastolic = get_safe(summaries[0], 'highDiastolic')
+        except Exception as e:
+            print(f"Blood pressure fetch error: {e}")
+
+        # 7. Activities
         activity_str = ""
         try:
             activities = api.get_activities_by_date(today, today)
@@ -224,21 +248,23 @@ def main():
 
         # --- PREPARE ROW ---
         new_row = [
-            today, 
+            today,
             weight, muscle_mass, fat_pct, water_pct,
             sleep_total, sleep_deep, sleep_rem, sleep_score,
             rhr, min_hr, max_hr, stress_avg, respiration_avg, spo2_avg,
             vo2_max, training_status, hrv_status, hrv_avg,
+            bp_systolic, bp_diastolic,
             steps, cals_goal, cals_total, cals_active,
             activity_str
         ]
 
         headers = [
-            "Date", 
+            "Date",
             "Weight (lbs)", "Muscle Mass (lbs)", "Body Fat %", "Water %",
             "Sleep Total (hr)", "Sleep Deep (hr)", "Sleep REM (hr)", "Sleep Score",
             "RHR", "Min HR", "Max HR", "Avg Stress", "Respiration", "SpO2",
             "VO2 Max", "Training Status", "HRV Status", "HRV Avg",
+            "BP Systolic", "BP Diastolic",
             "Steps", "Step Goal", "Cals Total", "Cals Active",
             "Activities"
         ]
@@ -287,8 +313,8 @@ def main():
             return
 
         rows.append(new_row)
-        # Sort by normalized date
-        rows.sort(key=lambda x: normalize_date(x[0]) if x else '')
+        # Sort by normalized date (newest first)
+        rows.sort(key=lambda x: normalize_date(x[0]) if x else '', reverse=True)
 
         with open(CSV_FILE, mode='w', newline='') as f:
             writer = csv.writer(f)
