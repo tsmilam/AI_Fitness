@@ -50,16 +50,21 @@ TOKEN_DIR = ".garth"
 DEFAULT_START_DATE = "2024-08-08"
 
 # Parse command line arguments
-# Usage: python history_garmin_import.py [start_date] [--backfill]
+# Usage: python history_garmin_import.py [start_date] [--backfill] [--force]
 #   start_date: Optional start date (default: 2024-08-08)
 #   --backfill: Update existing rows with missing data (e.g., new columns like BP)
+#   --force: Overwrite existing data with fresh Garmin data (re-sync all)
 START_DATE = DEFAULT_START_DATE
 BACKFILL_MODE = False
+FORCE_MODE = False
 
 for arg in sys.argv[1:]:
     if arg == "--backfill":
         BACKFILL_MODE = True
         print("BACKFILL MODE: Will update existing rows with missing data")
+    elif arg == "--force":
+        FORCE_MODE = True
+        print("FORCE MODE: Will overwrite existing data with fresh Garmin data")
     elif not arg.startswith("-"):
         START_DATE = arg
         print(f"Using command-line start date: {START_DATE}")
@@ -112,7 +117,7 @@ def main():
     
     # Load existing data
     existing_dates = set()
-    existing_data = {}  # For backfill mode: {date_str: row_list}
+    existing_data = {}  # For backfill/force mode: {date_str: row_list}
 
     def normalize_date(date_str):
         """Normalize date to ISO format"""
@@ -141,14 +146,16 @@ def main():
                     if row:
                         date_str = normalize_date(row[0])
                         existing_dates.add(date_str)
-                        if BACKFILL_MODE:
+                        if BACKFILL_MODE or FORCE_MODE:
                             # Remap columns to match new header order
                             new_row = [''] * len(headers)
                             for old_idx, value in enumerate(row):
                                 if old_idx in col_mapping:
                                     new_row[col_mapping[old_idx]] = value
                             existing_data[date_str] = new_row
-            if BACKFILL_MODE:
+            if FORCE_MODE:
+                print(f"Found {len(existing_dates)} existing dates (will overwrite with fresh data)")
+            elif BACKFILL_MODE:
                 print(f"Found {len(existing_dates)} existing dates (will update missing values)")
             else:
                 print(f"Found {len(existing_dates)} existing dates in file (will skip)")
@@ -163,13 +170,15 @@ def main():
     while current_date <= end:
         day_str = current_date.isoformat()
 
-        # Skip if date already exists (unless backfill mode)
-        if day_str in existing_dates and not BACKFILL_MODE:
+        # Skip if date already exists (unless backfill or force mode)
+        if day_str in existing_dates and not BACKFILL_MODE and not FORCE_MODE:
             print(f"Skipping {day_str} (already exists)")
             current_date += delta
             continue
 
-        if BACKFILL_MODE and day_str in existing_dates:
+        if FORCE_MODE and day_str in existing_dates:
+            print(f"Refreshing {day_str}...", end="", flush=True)
+        elif BACKFILL_MODE and day_str in existing_dates:
             print(f"Backfilling {day_str}...", end="", flush=True)
         else:
             print(f"Processing {day_str}...", end="", flush=True)
@@ -349,7 +358,11 @@ def main():
                 steps, cals_goal, cals_tot, cals_act, act_str
             ]
 
-            if BACKFILL_MODE:
+            if FORCE_MODE:
+                # Force mode: completely replace with fresh data
+                existing_data[day_str] = row
+                print(" Done.")
+            elif BACKFILL_MODE:
                 # Merge with existing data - only fill empty values
                 if day_str in existing_data:
                     old_row = existing_data[day_str]
@@ -378,8 +391,8 @@ def main():
         current_date += delta
         time.sleep(random.uniform(1.5, 3.0)) # Sleep 1.5 to 3 seconds
 
-    # In backfill mode, write all data back to file
-    if BACKFILL_MODE and existing_data:
+    # In backfill or force mode, write all data back to file
+    if (BACKFILL_MODE or FORCE_MODE) and existing_data:
         print("Writing updated data to file...")
         # Sort by date (newest first)
         sorted_dates = sorted(existing_data.keys(), reverse=True)

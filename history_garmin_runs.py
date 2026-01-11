@@ -36,12 +36,20 @@ SAVE_PATH = os.getenv("SAVE_PATH")
 CSV_FILE = os.path.join(SAVE_PATH, "garmin_runs.csv") if SAVE_PATH else "garmin_runs.csv"
 DEFAULT_START_DATE = "2024-08-08"
 
-# Accept start date from command line argument (e.g., python history_garmin_runs.py 2023-01-01)
-if len(sys.argv) > 1:
-    START_DATE = sys.argv[1]
-    print(f"Using command-line start date: {START_DATE}")
-else:
-    START_DATE = DEFAULT_START_DATE
+# Parse command line arguments
+# Usage: python history_garmin_runs.py [start_date] [--force]
+#   start_date: Optional start date (default: 2024-08-08)
+#   --force: Overwrite existing data with fresh Garmin data (re-sync all)
+START_DATE = DEFAULT_START_DATE
+FORCE_MODE = False
+
+for arg in sys.argv[1:]:
+    if arg == "--force":
+        FORCE_MODE = True
+        print("FORCE MODE: Will overwrite existing data with fresh Garmin data")
+    elif not arg.startswith("-"):
+        START_DATE = arg
+        print(f"Using command-line start date: {START_DATE}")
 # ---------------------
 
 def main():
@@ -61,17 +69,42 @@ def main():
     if not os.path.exists(folder_path):
         os.makedirs(folder_path)
 
+    # Load existing data
+    existing_dates = set()
+    existing_rows = []
+
+    if os.path.isfile(CSV_FILE):
+        try:
+            with open(CSV_FILE, mode='r', newline='', encoding='utf-8') as f:
+                reader = csv.reader(f)
+                headers = next(reader, None)
+                for row in reader:
+                    if row:
+                        date_str = row[0]
+                        time_str = row[1] if len(row) > 1 else ""
+                        existing_dates.add((date_str, time_str))
+                        existing_rows.append(row)
+            if FORCE_MODE:
+                print(f"   Found {len(existing_rows)} existing records (will overwrite)")
+                existing_rows = []  # Clear existing data in force mode
+                existing_dates = set()
+            else:
+                print(f"   Found {len(existing_rows)} existing records (will preserve)")
+        except Exception as e:
+            print(f"   Warning: Could not read existing file: {e}")
+
     start = date.fromisoformat(START_DATE)
     end = date.today()
     current = start
-    total_saved = 0
-    all_rows = []  # Collect all rows first
+    total_new = 0
+    all_rows = list(existing_rows)  # Start with existing data
 
     while current < end:
         chunk_end = current + timedelta(days=30)
         if chunk_end > end: chunk_end = end
 
         print(f"   Processing {current} to {chunk_end}...", end="", flush=True)
+        chunk_added = 0
 
         try:
             activities = api.get_activities_by_date(current.isoformat(), chunk_end.isoformat(), "running")
@@ -110,15 +143,20 @@ def main():
                     z3 = act.get('hrTimeInZone_3')
                     z4 = act.get('hrTimeInZone_4')
 
+                    # Skip if already exists (unless force mode)
+                    if (date_str, time_str) in existing_dates:
+                        continue
+
                     all_rows.append([
                         date_str, time_str, title, atype_key,
                         dur, elapsed, moving, avg_spd, avg_hr, max_hr, steps,
                         summ_sets, t_sets, a_sets, t_reps,
                         te_lbl, load, min_lap, z1, z2, z3, z4
                     ])
+                    chunk_added += 1
+                    total_new += 1
 
-                print(f" Found {len(activities)}.")
-                total_saved += len(activities)
+                print(f" Found {len(activities)}, added {chunk_added} new.")
             else:
                 print(" No data.")
 
@@ -142,9 +180,9 @@ def main():
                 "hrTimeInZone_1", "hrTimeInZone_2", "hrTimeInZone_3", "hrTimeInZone_4"
             ])
             writer.writerows(all_rows)
-        print(f"Saved {total_saved} records (sorted newest to oldest).")
+        print(f"   Written {len(all_rows)} total records (sorted newest to oldest).")
 
-    print(f"--- COMPLETE. Saved {total_saved} records. ---")
+    print(f"--- COMPLETE. Added {total_new} new records. ---")
 
 if __name__ == "__main__":
     main()

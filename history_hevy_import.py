@@ -51,13 +51,21 @@ else:
     print("WARNING: SAVE_PATH not set in .env. Using current folder.")
     CSV_FILE = "hevy_stats.csv"
 
-# Accept start date from command line argument (e.g., python history_hevy_import.py 2023-01-01)
+# Parse command line arguments
+# Usage: python history_hevy_import.py [start_date] [--force]
+#   start_date: Optional start date (default: 2023-01-01)
+#   --force: Overwrite existing data with fresh Hevy data (re-sync all)
 DEFAULT_START_DATE = "2023-01-01"
-if len(sys.argv) > 1:
-    START_DATE = sys.argv[1]
-    print(f"Using command-line start date: {START_DATE}")
-else:
-    START_DATE = DEFAULT_START_DATE
+START_DATE = DEFAULT_START_DATE
+FORCE_MODE = False
+
+for arg in sys.argv[1:]:
+    if arg == "--force":
+        FORCE_MODE = True
+        print("FORCE MODE: Will overwrite existing data with fresh Hevy data")
+    elif not arg.startswith("-"):
+        START_DATE = arg
+        print(f"Using command-line start date: {START_DATE}")
 
 # Extract year for API filtering, but also use full date for precise filtering
 START_YEAR = int(START_DATE.split('-')[0])
@@ -88,9 +96,31 @@ def main():
             print(f"Error creating folder: {e}")
             # We continue anyway, in case it's a root drive issue
             
-    # 2. Write Headers (if file is new)
+    # 2. Load existing data
     file_exists = os.path.isfile(CSV_FILE)
-    if not file_exists:
+    existing_entries = set()
+    existing_rows = []
+
+    if file_exists:
+        try:
+            with open(CSV_FILE, mode='r', newline='', encoding='utf-8') as f:
+                reader = csv.reader(f)
+                headers = next(reader, None)
+                for row in reader:
+                    if row:
+                        # Create unique key: date, workout, exercise, set number
+                        key = (row[0], row[1], row[2], row[3])
+                        existing_entries.add(key)
+                        existing_rows.append(row)
+            if FORCE_MODE:
+                print(f"   Found {len(existing_rows)} existing records (will overwrite)")
+                existing_rows = []
+                existing_entries = set()
+            else:
+                print(f"   Found {len(existing_rows)} existing records (will preserve)")
+        except Exception as e:
+            print(f"   Warning: Could not read existing file: {e}")
+    else:
         try:
             with open(CSV_FILE, mode='w', newline='', encoding='utf-8') as f:
                 writer = csv.writer(f)
@@ -100,9 +130,9 @@ def main():
             return
 
     page = 1
-    total_sets = 0
+    total_new = 0
     keep_going = True
-    all_new_rows = []  # Collect all rows first
+    all_new_rows = list(existing_rows)  # Start with existing data
 
     # 3. Fetch Loop
     while keep_going:
@@ -155,6 +185,11 @@ def main():
                         reps = s.get('reps', 0)
                         s_type = s.get('type', 'normal')
 
+                        # Skip if already exists (unless force mode)
+                        key = (w_date_clean, w_title, ex_name, str(i + 1))
+                        if key in existing_entries:
+                            continue
+
                         row = [
                             w_date_clean,
                             w_title,
@@ -166,11 +201,11 @@ def main():
                             s_type
                         ]
                         page_rows.append(row)
+                        total_new += 1
 
             if page_rows:
                 all_new_rows.extend(page_rows)
-                print(f" Found {len(page_rows)} sets.")
-                total_sets += len(page_rows)
+                print(f" Found {len(page_rows)} new sets.")
             else:
                 print(" (Page empty).")
 
@@ -185,12 +220,13 @@ def main():
     if all_new_rows:
         # Sort by date descending (newest first)
         all_new_rows.sort(key=lambda x: x[0], reverse=True)
-        with open(CSV_FILE, mode='a', newline='', encoding='utf-8') as f:
+        with open(CSV_FILE, mode='w', newline='', encoding='utf-8') as f:
             writer = csv.writer(f)
+            writer.writerow(["Date", "Workout", "Exercise", "Set", "Weight (lbs)", "Reps", "RPE", "Type"])
             writer.writerows(all_new_rows)
-        print(f"Saved {total_sets} sets (sorted newest to oldest).")
+        print(f"   Written {len(all_new_rows)} total records (sorted newest to oldest).")
 
-    print(f"--- COMPLETE. Total Sets Saved: {total_sets} ---")
+    print(f"--- COMPLETE. Added {total_new} new records. ---")
 
 if __name__ == "__main__":
     main()

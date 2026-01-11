@@ -44,6 +44,12 @@ TRACKED_FILES = {
         "sched": {"minute": 30},
         "command": f"cd {PROJECT_DIR} && /usr/bin/python3 daily_garmin_health.py >> {LOG_FILE} 2>&1"
     },
+    "Garmin Yesterday": {
+        "path": os.path.join(SAVE_PATH, "garmin_stats.csv"),
+        "interval": "daily",
+        "sched": {"hour": 6, "minute": 0},
+        "command": f"cd {PROJECT_DIR} && /usr/bin/python3 update_yesterday_garmin.py >> {LOG_FILE} 2>&1"
+    },
     "Hevy Workouts": {
         "path": os.path.join(SAVE_PATH, "hevy_stats.csv"),
         "interval": "hourly",
@@ -774,13 +780,18 @@ with tab1:
 
             runs_df = load_garmin_runs()
             if runs_df is not None:
-                # Distance unit toggle
+                # Distance unit toggle (persists user selection)
+                if 'distance_unit_preference' not in st.session_state:
+                    st.session_state.distance_unit_preference = "Miles"  # Default to Miles
+
                 distance_unit = st.radio(
                     "Distance Unit",
                     options=["Kilometers", "Miles"],
                     horizontal=True,
+                    index=0 if st.session_state.distance_unit_preference == "Kilometers" else 1,
                     key="cardio_distance_unit"
                 )
+                st.session_state.distance_unit_preference = distance_unit
                 use_miles = distance_unit == "Miles"
                 km_to_miles = 0.621371
 
@@ -1261,43 +1272,59 @@ with tab3:
         st.markdown(f"**Selected:** {history_start_date.isoformat()}")
         st.caption("Data will be imported from this date to yesterday.")
 
+    # Import options
+    force_refresh = st.checkbox(
+        "Force Refresh (overwrite existing data)",
+        value=False,
+        help="Re-sync with Garmin/Hevy even if data already exists. Use this to fix incomplete step counts."
+    )
+
+    # Help text for users
+    if force_refresh:
+        st.warning("**Force Mode ON:** All existing data in the date range will be replaced with fresh data from Garmin/Hevy.")
+    else:
+        st.info("**Normal Mode:** Only new dates will be added. Existing records are preserved. Enable 'Force Refresh' to re-sync and fix incomplete data (e.g., step counts captured too early in the day).")
+
     # History import buttons
     hist_col1, hist_col2, hist_col3, hist_col4 = st.columns(4)
 
     history_date_str = history_start_date.isoformat()
+    force_flag = " --force" if force_refresh else ""
+
+    mode_label = " [FORCE]" if force_refresh else ""
 
     with hist_col1:
         if st.button("Import Garmin Health", key="run_history_garmin"):
-            cmd = f"cd {PROJECT_DIR} && /usr/bin/python3 history_garmin_import.py {history_date_str} >> {LOG_FILE} 2>&1"
+            cmd = f"cd {PROJECT_DIR} && /usr/bin/python3 history_garmin_import.py {history_date_str}{force_flag} >> {LOG_FILE} 2>&1"
             subprocess.Popen(cmd, shell=True)
-            st.toast(f"Started: Garmin Health History (from {history_date_str})")
-            st.success("Garmin Health import started! Check logs for progress.")
+            st.toast(f"Started: Garmin Health History{mode_label}")
+            st.success(f"Garmin Health import started{mode_label}! Check logs for progress.")
 
     with hist_col2:
         if st.button("Import Garmin Runs", key="run_history_runs"):
-            cmd = f"cd {PROJECT_DIR} && /usr/bin/python3 history_garmin_runs.py {history_date_str} >> {LOG_FILE} 2>&1"
+            cmd = f"cd {PROJECT_DIR} && /usr/bin/python3 history_garmin_runs.py {history_date_str}{force_flag} >> {LOG_FILE} 2>&1"
             subprocess.Popen(cmd, shell=True)
-            st.toast(f"Started: Garmin Runs History (from {history_date_str})")
-            st.success("Garmin Runs import started! Check logs for progress.")
+            st.toast(f"Started: Garmin Runs History{mode_label}")
+            st.success(f"Garmin Runs import started{mode_label}! Check logs for progress.")
 
     with hist_col3:
         if st.button("Import Hevy Workouts", key="run_history_hevy"):
-            cmd = f"cd {PROJECT_DIR} && /usr/bin/python3 history_hevy_import.py {history_date_str} >> {LOG_FILE} 2>&1"
+            cmd = f"cd {PROJECT_DIR} && /usr/bin/python3 history_hevy_import.py {history_date_str}{force_flag} >> {LOG_FILE} 2>&1"
             subprocess.Popen(cmd, shell=True)
-            st.toast(f"Started: Hevy History (from {history_date_str})")
-            st.success("Hevy Workouts import started! Check logs for progress.")
+            st.toast(f"Started: Hevy History{mode_label}")
+            st.success(f"Hevy Workouts import started{mode_label}! Check logs for progress.")
 
     with hist_col4:
         if st.button("Run All Imports", type="primary", key="run_all_history"):
             # Run all three imports
-            cmd1 = f"cd {PROJECT_DIR} && /usr/bin/python3 history_garmin_import.py {history_date_str} >> {LOG_FILE} 2>&1"
-            cmd2 = f"cd {PROJECT_DIR} && /usr/bin/python3 history_garmin_runs.py {history_date_str} >> {LOG_FILE} 2>&1"
-            cmd3 = f"cd {PROJECT_DIR} && /usr/bin/python3 history_hevy_import.py {history_date_str} >> {LOG_FILE} 2>&1"
+            cmd1 = f"cd {PROJECT_DIR} && /usr/bin/python3 history_garmin_import.py {history_date_str}{force_flag} >> {LOG_FILE} 2>&1"
+            cmd2 = f"cd {PROJECT_DIR} && /usr/bin/python3 history_garmin_runs.py {history_date_str}{force_flag} >> {LOG_FILE} 2>&1"
+            cmd3 = f"cd {PROJECT_DIR} && /usr/bin/python3 history_hevy_import.py {history_date_str}{force_flag} >> {LOG_FILE} 2>&1"
             subprocess.Popen(cmd1, shell=True)
             subprocess.Popen(cmd2, shell=True)
             subprocess.Popen(cmd3, shell=True)
-            st.toast(f"Started: All History Imports (from {history_date_str})")
-            st.success("All imports started! Check logs for progress.")
+            st.toast(f"Started: All History Imports{mode_label}")
+            st.success(f"All imports started{mode_label}! Check logs for progress.")
 
     st.markdown("---")
 
