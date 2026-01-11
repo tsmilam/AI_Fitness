@@ -15,14 +15,17 @@ This project creates a comprehensive fitness tracking system that automatically 
 ### Dashboard
 - **Training Analytics** - Volume progression, muscle group distribution, workout history
 - **Recovery Metrics** - Sleep scores, HRV, weight trends, resting heart rate
-- **Cardio Tracking** - Running distance, pace trends, heart rate zones
+- **Multi-Sport Cardio** - Running, cycling, swimming with sport-specific metrics
 - **System Monitoring** - Task status, cron jobs, system vitals
 - **Trend Lines** - Smooth rolling averages overlay on charts
 
 ### Data Sync
 - **Garmin Connect** - Sleep, HRV, weight, body composition, SpO2, respiration, VO2 Max
 - **Hevy App** - Workouts, exercises, sets, reps, RPE
-- **Running Activities** - Pace, distance, HR zones, training effect
+- **Multi-Sport Activities** - Running, cycling, swimming, hiking, and more
+  - Running: Pace, distance, HR zones, cadence, training effect
+  - Cycling: Speed, power (watts), cadence, elevation gain
+  - Swimming: Stroke count, laps, pool length
 
 ### AI Integration
 - **Gemini AI Coach** - Generates personalized 4-week PPL routines
@@ -72,15 +75,15 @@ AI_Fitness/
 ├── .env                      # Configuration (created by setup.py)
 │
 ├── Daily Scripts (Cron)
-│   ├── daily_garmin_health.py   # Health metrics sync
-│   ├── daily_garmin_runs.py     # Running activities sync
-│   └── daily_hevy_workouts.py   # Workout sync
+│   ├── daily_garmin_health.py      # Health metrics sync
+│   ├── daily_garmin_activities.py  # All cardio activities (run/cycle/swim)
+│   └── daily_hevy_workouts.py      # Workout sync
 │
 ├── History Import
-│   ├── history_garmin_import.py # Bulk import Garmin history
-│   ├── history_garmin_runs.py   # Bulk import run history
-│   ├── history_hevy_import.py   # Bulk import Hevy history
-│   └── update_yesterday_garmin.py # Fix incomplete daily data
+│   ├── history_garmin_import.py     # Bulk import Garmin health history
+│   ├── history_garmin_activities.py # Bulk import all activities (run/cycle/swim)
+│   ├── history_hevy_import.py       # Bulk import Hevy history
+│   └── update_yesterday_garmin.py   # Fix incomplete daily data
 │
 ├── AI Coach
 │   ├── Gemini_Hevy.py           # AI routine generator
@@ -165,8 +168,8 @@ Add these lines:
 # Hevy workout sync (every hour at :35)
 35 * * * * cd /home/pi/Documents/AI_Fitness && /usr/bin/python3 daily_hevy_workouts.py >> /home/pi/cron_log.txt 2>&1
 
-# Garmin runs sync (every hour at :40)
-40 * * * * cd /home/pi/Documents/AI_Fitness && /usr/bin/python3 daily_garmin_runs.py >> /home/pi/cron_log.txt 2>&1
+# Garmin activities sync (every hour at :40) - runs, cycling, swimming, etc.
+40 * * * * cd /home/pi/Documents/AI_Fitness && /usr/bin/python3 daily_garmin_activities.py >> /home/pi/cron_log.txt 2>&1
 
 # --- DAILY TASKS ---
 # Update yesterday's Garmin data (6:00 AM - captures complete step counts)
@@ -179,7 +182,7 @@ Add these lines:
 # --- ON REBOOT (optional - sync data after restart) ---
 @reboot sleep 60 && cd /home/pi/Documents/AI_Fitness && /usr/bin/python3 daily_garmin_health.py >> /home/pi/cron_log.txt 2>&1
 @reboot sleep 65 && cd /home/pi/Documents/AI_Fitness && /usr/bin/python3 daily_hevy_workouts.py >> /home/pi/cron_log.txt 2>&1
-@reboot sleep 70 && cd /home/pi/Documents/AI_Fitness && /usr/bin/python3 daily_garmin_runs.py >> /home/pi/cron_log.txt 2>&1
+@reboot sleep 70 && cd /home/pi/Documents/AI_Fitness && /usr/bin/python3 daily_garmin_activities.py >> /home/pi/cron_log.txt 2>&1
 ```
 
 ### Google Drive Mount (rclone)
@@ -304,9 +307,9 @@ SAVE_PATH=G:\My Drive\Fitness Data
 Before automation, backfill your history:
 
 ```bash
-python3 history_hevy_import.py      # All past workouts
-python3 history_garmin_import.py    # Past health metrics
-python3 history_garmin_runs.py      # Past runs
+python3 history_hevy_import.py           # All past workouts
+python3 history_garmin_import.py         # Past health metrics
+python3 history_garmin_activities.py     # Past activities (runs, cycling, swimming)
 ```
 
 ### Import Flags

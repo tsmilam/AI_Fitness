@@ -33,7 +33,7 @@ else:
 # CSV file paths
 HEVY_STATS_FILE = os.path.join(SAVE_PATH, "hevy_stats.csv")
 GARMIN_STATS_FILE = os.path.join(SAVE_PATH, "garmin_stats.csv")
-GARMIN_RUNS_FILE = os.path.join(SAVE_PATH, "garmin_runs.csv")
+GARMIN_ACTIVITIES_FILE = os.path.join(SAVE_PATH, "garmin_activities.csv")
 HEVY_EXERCISES_FILE = os.path.join(SAVE_PATH, "HEVY APP exercises.csv")
 
 # Tracked Files & Commands (using environment-based paths)
@@ -56,11 +56,11 @@ TRACKED_FILES = {
         "sched": {"minute": 35},
         "command": f"cd {PROJECT_DIR} && /usr/bin/python3 daily_hevy_workouts.py >> {LOG_FILE} 2>&1"
     },
-    "Garmin Runs": {
-        "path": os.path.join(SAVE_PATH, "garmin_runs.csv"),
+    "Garmin Activities": {
+        "path": os.path.join(SAVE_PATH, "garmin_activities.csv"),
         "interval": "hourly",
         "sched": {"minute": 40},
-        "command": f"cd {PROJECT_DIR} && /usr/bin/python3 daily_garmin_runs.py >> {LOG_FILE} 2>&1"
+        "command": f"cd {PROJECT_DIR} && /usr/bin/python3 daily_garmin_activities.py >> {LOG_FILE} 2>&1"
     },
     "Hevy Ticker": {
         "path": os.path.join(os.path.dirname(PROJECT_DIR), "Hevy_Ticker", "ticker.log"),
@@ -200,17 +200,17 @@ def load_garmin_data():
 
 
 @st.cache_data(ttl=300)
-def load_garmin_runs():
-    """Load garmin running data"""
-    if not os.path.exists(GARMIN_RUNS_FILE):
+def load_garmin_activities():
+    """Load garmin activities data (running, cycling, swimming, etc.)"""
+    if not os.path.exists(GARMIN_ACTIVITIES_FILE):
         return None
     try:
-        df = pd.read_csv(GARMIN_RUNS_FILE)
+        df = pd.read_csv(GARMIN_ACTIVITIES_FILE)
         # Handle mixed date formats (ISO and US format)
         df['Date'] = pd.to_datetime(df['Date'], format='mixed', dayfirst=False)
         return df
     except Exception as e:
-        st.error(f"Error loading Garmin runs data: {e}")
+        st.error(f"Error loading Garmin activities data: {e}")
         return None
 
 
@@ -776,28 +776,59 @@ with tab1:
 
             # --- CARDIO SECTION ---
             st.markdown("---")
-            st.subheader("Cardio Training (Garmin Runs)")
+            st.subheader("Cardio Training (All Activities)")
 
-            runs_df = load_garmin_runs()
-            if runs_df is not None:
-                # Distance unit toggle (persists user selection)
-                if 'distance_unit_preference' not in st.session_state:
-                    st.session_state.distance_unit_preference = "Miles"  # Default to Miles
+            activities_df = load_garmin_activities()
+            if activities_df is not None:
+                # Sport filter and distance unit controls
+                filter_col1, filter_col2 = st.columns([1, 2])
 
-                distance_unit = st.radio(
-                    "Distance Unit",
-                    options=["Kilometers", "Miles"],
-                    horizontal=True,
-                    index=0 if st.session_state.distance_unit_preference == "Kilometers" else 1,
-                    key="cardio_distance_unit"
-                )
-                st.session_state.distance_unit_preference = distance_unit
+                with filter_col1:
+                    # Get available sport types from data
+                    if 'sportType' in activities_df.columns:
+                        available_sports = ['All'] + sorted(activities_df['sportType'].dropna().unique().tolist())
+                    else:
+                        available_sports = ['All']
+
+                    # Persist sport filter selection
+                    if 'sport_filter_preference' not in st.session_state:
+                        st.session_state.sport_filter_preference = "All"
+
+                    sport_filter = st.selectbox(
+                        "Sport Type",
+                        options=available_sports,
+                        index=available_sports.index(st.session_state.sport_filter_preference) if st.session_state.sport_filter_preference in available_sports else 0,
+                        key="sport_filter"
+                    )
+                    st.session_state.sport_filter_preference = sport_filter
+
+                with filter_col2:
+                    # Distance unit toggle (persists user selection)
+                    if 'distance_unit_preference' not in st.session_state:
+                        st.session_state.distance_unit_preference = "Miles"  # Default to Miles
+
+                    distance_unit = st.radio(
+                        "Distance Unit",
+                        options=["Kilometers", "Miles"],
+                        horizontal=True,
+                        index=0 if st.session_state.distance_unit_preference == "Kilometers" else 1,
+                        key="cardio_distance_unit"
+                    )
+                    st.session_state.distance_unit_preference = distance_unit
+
                 use_miles = distance_unit == "Miles"
                 km_to_miles = 0.621371
 
                 # Filter by date range
-                runs_mask = (runs_df['Date'] >= start_datetime) & (runs_df['Date'] <= end_datetime)
-                filtered_runs = runs_df[runs_mask].copy()
+                activities_mask = (activities_df['Date'] >= start_datetime) & (activities_df['Date'] <= end_datetime)
+                filtered_activities = activities_df[activities_mask].copy()
+
+                # Apply sport filter
+                if sport_filter != 'All' and 'sportType' in filtered_activities.columns:
+                    filtered_activities = filtered_activities[filtered_activities['sportType'] == sport_filter].copy()
+
+                # Rename for backward compatibility with existing code
+                filtered_runs = filtered_activities
 
                 if not filtered_runs.empty:
                     # Calculate previous period for comparison (trend arrows)
@@ -865,14 +896,18 @@ with tab1:
                     delta_hr = avg_hr - prev_avg_hr if prev_avg_hr is not None and pd.notna(prev_avg_hr) else None
                     delta_duration = avg_duration - prev_avg_duration if prev_avg_duration is not None and pd.notna(prev_avg_duration) else None
 
+                    # Context-aware labels based on sport type
+                    activity_label = "Activities" if sport_filter == "All" else sport_filter.title()
+                    single_label = "Activity" if sport_filter == "All" else sport_filter.title()
+
                     with cardio_col1:
-                        st.metric("Total Runs", total_runs,
+                        st.metric(f"Total {activity_label}", total_runs,
                                  delta=f"{delta_runs:+d}" if delta_runs is not None else None)
                     with cardio_col2:
                         st.metric("Total Distance", f"{total_distance:.1f} {dist_unit}",
                                  delta=f"{delta_distance:+.1f}" if delta_distance is not None else None)
                     with cardio_col3:
-                        st.metric("Avg Run Distance", f"{avg_distance:.2f} {dist_unit}",
+                        st.metric(f"Avg {single_label} Distance", f"{avg_distance:.2f} {dist_unit}",
                                  delta=f"{delta_avg_distance:+.2f}" if delta_avg_distance is not None else None)
                     with cardio_col4:
                         st.metric("Avg Heart Rate", f"{avg_hr:.0f} bpm" if pd.notna(avg_hr) else "N/A",
@@ -893,11 +928,12 @@ with tab1:
                                 filtered_runs['distance_display'] = filtered_runs['distance_km'] * km_to_miles
                             else:
                                 filtered_runs['distance_display'] = filtered_runs['distance_km']
+                            chart_title = f"{activity_label} Distance Over Time" if sport_filter != "All" else "Activity Distance Over Time"
                             fig_distance = px.bar(
                                 filtered_runs,
                                 x='Date',
                                 y='distance_display',
-                                title="Running Distance Over Time",
+                                title=chart_title,
                                 color='averageHR',
                                 color_continuous_scale='Reds'
                             )
@@ -936,36 +972,86 @@ with tab1:
                             )
                             st.plotly_chart(fig_zones, use_container_width=True)
 
-                    # Speed/Pace trend
+                    # Speed/Pace trend - context-aware based on sport type
                     if 'averageSpeed' in filtered_runs.columns:
-                        # Convert m/s to pace (min/km or min/mi)
-                        filtered_runs['pace_min_km'] = 1000 / (filtered_runs['averageSpeed'] * 60)
-                        if use_miles:
-                            # Convert min/km to min/mi (1 mile = 1.60934 km)
-                            filtered_runs['pace_display'] = filtered_runs['pace_min_km'] * 1.60934
-                            pace_unit = "min/mi"
+                        # For cycling: show speed (km/h or mph)
+                        # For running/swimming: show pace (min/km or min/mi)
+                        is_cycling = sport_filter == 'cycling'
+                        is_swimming = sport_filter == 'swimming'
+
+                        if is_cycling:
+                            # Speed in km/h or mph
+                            filtered_runs['speed_kmh'] = filtered_runs['averageSpeed'] * 3.6  # m/s to km/h
+                            if use_miles:
+                                filtered_runs['speed_display'] = filtered_runs['speed_kmh'] * km_to_miles
+                                speed_unit = "mph"
+                            else:
+                                filtered_runs['speed_display'] = filtered_runs['speed_kmh']
+                                speed_unit = "km/h"
+
+                            fig_speed = px.line(
+                                filtered_runs,
+                                x='Date',
+                                y='speed_display',
+                                markers=True,
+                                title="Cycling Speed Trend (higher is faster)"
+                            )
+                            fig_speed.update_layout(
+                                xaxis_title="Date",
+                                yaxis_title=f"Speed ({speed_unit})",
+                                template="plotly_dark",
+                                height=300
+                            )
+                            fig_speed.update_traces(line_color='#61afef', marker_color='#e5c07b')
+                            st.plotly_chart(fig_speed, use_container_width=True)
+
+                            # Show power chart for cycling if available
+                            if 'avgPower' in filtered_runs.columns and filtered_runs['avgPower'].notna().any():
+                                fig_power = px.line(
+                                    filtered_runs,
+                                    x='Date',
+                                    y='avgPower',
+                                    markers=True,
+                                    title="Cycling Power Trend"
+                                )
+                                fig_power.update_layout(
+                                    xaxis_title="Date",
+                                    yaxis_title="Avg Power (Watts)",
+                                    template="plotly_dark",
+                                    height=300
+                                )
+                                fig_power.update_traces(line_color='#c678dd', marker_color='#e5c07b')
+                                st.plotly_chart(fig_power, use_container_width=True)
                         else:
-                            filtered_runs['pace_display'] = filtered_runs['pace_min_km']
-                            pace_unit = "min/km"
-                        fig_pace = px.line(
-                            filtered_runs,
-                            x='Date',
-                            y='pace_display',
-                            markers=True,
-                            title="Running Pace Trend (lower is faster)"
-                        )
-                        fig_pace.update_layout(
-                            xaxis_title="Date",
-                            yaxis_title=f"Pace ({pace_unit})",
-                            template="plotly_dark",
-                            height=300
-                        )
-                        fig_pace.update_traces(line_color='#e06c75', marker_color='#e5c07b')
-                        st.plotly_chart(fig_pace, use_container_width=True)
+                            # Pace for running/swimming/other
+                            filtered_runs['pace_min_km'] = 1000 / (filtered_runs['averageSpeed'] * 60)
+                            if use_miles:
+                                filtered_runs['pace_display'] = filtered_runs['pace_min_km'] * 1.60934
+                                pace_unit = "min/mi"
+                            else:
+                                filtered_runs['pace_display'] = filtered_runs['pace_min_km']
+                                pace_unit = "min/km"
+
+                            pace_title = f"{single_label} Pace Trend (lower is faster)" if sport_filter != "All" else "Pace Trend (lower is faster)"
+                            fig_pace = px.line(
+                                filtered_runs,
+                                x='Date',
+                                y='pace_display',
+                                markers=True,
+                                title=pace_title
+                            )
+                            fig_pace.update_layout(
+                                xaxis_title="Date",
+                                yaxis_title=f"Pace ({pace_unit})",
+                                template="plotly_dark",
+                                height=300
+                            )
+                            fig_pace.update_traces(line_color='#e06c75', marker_color='#e5c07b')
+                            st.plotly_chart(fig_pace, use_container_width=True)
                 else:
-                    st.info("No running data found for the selected date range.")
+                    st.info(f"No {activity_label.lower()} found for the selected date range.")
             else:
-                st.info("Garmin runs data file not found.")
+                st.info("Garmin activities data file not found. Run 'daily_garmin_activities.py' or import history.")
 
 
 # --- TAB 2: Recovery (Garmin) ---
@@ -1301,11 +1387,11 @@ with tab3:
             st.success(f"Garmin Health import started{mode_label}! Check logs for progress.")
 
     with hist_col2:
-        if st.button("Import Garmin Runs", key="run_history_runs"):
-            cmd = f"cd {PROJECT_DIR} && /usr/bin/python3 history_garmin_runs.py {history_date_str}{force_flag} >> {LOG_FILE} 2>&1"
+        if st.button("Import Garmin Activities", key="run_history_activities"):
+            cmd = f"cd {PROJECT_DIR} && /usr/bin/python3 history_garmin_activities.py {history_date_str}{force_flag} >> {LOG_FILE} 2>&1"
             subprocess.Popen(cmd, shell=True)
-            st.toast(f"Started: Garmin Runs History{mode_label}")
-            st.success(f"Garmin Runs import started{mode_label}! Check logs for progress.")
+            st.toast(f"Started: Garmin Activities History{mode_label}")
+            st.success(f"Garmin Activities import started{mode_label}! Check logs for progress.")
 
     with hist_col3:
         if st.button("Import Hevy Workouts", key="run_history_hevy"):
@@ -1318,7 +1404,7 @@ with tab3:
         if st.button("Run All Imports", type="primary", key="run_all_history"):
             # Run all three imports
             cmd1 = f"cd {PROJECT_DIR} && /usr/bin/python3 history_garmin_import.py {history_date_str}{force_flag} >> {LOG_FILE} 2>&1"
-            cmd2 = f"cd {PROJECT_DIR} && /usr/bin/python3 history_garmin_runs.py {history_date_str}{force_flag} >> {LOG_FILE} 2>&1"
+            cmd2 = f"cd {PROJECT_DIR} && /usr/bin/python3 history_garmin_activities.py {history_date_str}{force_flag} >> {LOG_FILE} 2>&1"
             cmd3 = f"cd {PROJECT_DIR} && /usr/bin/python3 history_hevy_import.py {history_date_str}{force_flag} >> {LOG_FILE} 2>&1"
             subprocess.Popen(cmd1, shell=True)
             subprocess.Popen(cmd2, shell=True)
