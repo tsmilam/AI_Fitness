@@ -158,6 +158,7 @@ crontab -e
 
 Add these lines:
 ```bash
+# --- HOURLY DATA SYNC ---
 # Garmin health sync (every hour at :30)
 30 * * * * cd /home/pi/Documents/AI_Fitness && /usr/bin/python3 daily_garmin_health.py >> /home/pi/cron_log.txt 2>&1
 
@@ -167,8 +168,18 @@ Add these lines:
 # Garmin runs sync (every hour at :40)
 40 * * * * cd /home/pi/Documents/AI_Fitness && /usr/bin/python3 daily_garmin_runs.py >> /home/pi/cron_log.txt 2>&1
 
-# Monthly AI plan (1st of month at 1:00 AM)
+# --- DAILY TASKS ---
+# Update yesterday's Garmin data (6:00 AM - captures complete step counts)
+0 6 * * * cd /home/pi/Documents/AI_Fitness && /usr/bin/python3 update_yesterday_garmin.py >> /home/pi/cron_log.txt 2>&1
+
+# --- MONTHLY TASKS ---
+# AI workout plan generation (1st of month at 1:00 AM)
 0 1 1 * * cd /home/pi/Documents/AI_Fitness && ./venv/bin/python Gemini_Hevy.py >> /home/pi/cron_log.txt 2>&1
+
+# --- ON REBOOT (optional - sync data after restart) ---
+@reboot sleep 60 && cd /home/pi/Documents/AI_Fitness && /usr/bin/python3 daily_garmin_health.py >> /home/pi/cron_log.txt 2>&1
+@reboot sleep 65 && cd /home/pi/Documents/AI_Fitness && /usr/bin/python3 daily_hevy_workouts.py >> /home/pi/cron_log.txt 2>&1
+@reboot sleep 70 && cd /home/pi/Documents/AI_Fitness && /usr/bin/python3 daily_garmin_runs.py >> /home/pi/cron_log.txt 2>&1
 ```
 
 ### Google Drive Mount (rclone)
@@ -182,6 +193,106 @@ rclone config
 
 # Mount (add to /etc/fstab for boot)
 rclone mount gdrive: /home/pi/GDrive --vfs-cache-mode writes &
+```
+
+---
+
+## Windows Setup
+
+### 1. Clone & Setup
+
+```powershell
+git clone https://github.com/johnson4601/AI_Fitness.git
+cd AI_Fitness
+
+# Create virtual environment
+python -m venv venv
+venv\Scripts\activate
+
+# Run interactive setup
+python setup.py
+```
+
+### 2. Environment Configuration
+
+Update `.env` with Windows-style paths:
+
+```ini
+SAVE_PATH=C:\Users\YourName\Google Drive\Fitness Data
+CHECK_MOUNT_STATUS=False
+```
+
+> **Note:** Set `CHECK_MOUNT_STATUS=False` on Windows - the mount check is Linux-specific.
+
+### 3. Start Dashboard
+
+```powershell
+venv\Scripts\activate
+streamlit run dashboard_local_server.py
+```
+
+Access at: `http://localhost:8501`
+
+### 4. Scheduled Tasks (Windows Task Scheduler)
+
+Open Task Scheduler (`taskschd.msc`) and create tasks for each script:
+
+#### Hourly Data Sync (Garmin Health)
+
+1. **Create Task** → Name: "AI Fitness - Garmin Health"
+2. **Trigger** → Daily, repeat every 1 hour
+3. **Action** → Start a program:
+   - Program: `C:\Users\YourName\AI_Fitness\venv\Scripts\python.exe`
+   - Arguments: `daily_garmin_health.py`
+   - Start in: `C:\Users\YourName\AI_Fitness`
+
+#### Daily Yesterday Sync (6 AM)
+
+1. **Create Task** → Name: "AI Fitness - Yesterday Garmin"
+2. **Trigger** → Daily at 6:00 AM
+3. **Action** → Start a program:
+   - Program: `C:\Users\YourName\AI_Fitness\venv\Scripts\python.exe`
+   - Arguments: `update_yesterday_garmin.py`
+   - Start in: `C:\Users\YourName\AI_Fitness`
+
+#### Monthly AI Plan (1st of month)
+
+1. **Create Task** → Name: "AI Fitness - Monthly AI Plan"
+2. **Trigger** → Monthly, Day 1, at 1:00 AM
+3. **Action** → Start a program:
+   - Program: `C:\Users\YourName\AI_Fitness\venv\Scripts\python.exe`
+   - Arguments: `Gemini_Hevy.py`
+   - Start in: `C:\Users\YourName\AI_Fitness`
+
+> **Tip:** Under "Conditions", uncheck "Start only if on AC power" for laptops.
+
+### 5. Dashboard Autostart (Optional)
+
+Create a batch file `start_dashboard.bat`:
+
+```batch
+@echo off
+cd /d C:\Users\YourName\AI_Fitness
+call venv\Scripts\activate
+streamlit run dashboard_local_server.py
+```
+
+Add to Startup:
+1. Press `Win + R`, type `shell:startup`
+2. Create shortcut to `start_dashboard.bat`
+
+### 6. Google Drive Sync
+
+Windows options for Google Drive:
+
+| Method | Description |
+|--------|-------------|
+| **Google Drive Desktop** | Native app, auto-syncs to `G:\My Drive` |
+| **rclone** | Command-line, same as Linux setup |
+
+If using Google Drive Desktop, update `.env`:
+```ini
+SAVE_PATH=G:\My Drive\Fitness Data
 ```
 
 ---
