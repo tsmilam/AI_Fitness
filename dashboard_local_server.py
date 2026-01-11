@@ -779,6 +779,7 @@ with tab1:
             st.subheader("Cardio Training (All Activities)")
 
             activities_df = load_garmin_activities()
+            garmin_df = load_garmin_data()  # Load for power-to-weight calculation
             if activities_df is not None:
                 # Sport filter and distance unit controls
                 filter_col1, filter_col2 = st.columns([1, 2])
@@ -835,8 +836,12 @@ with tab1:
                     period_days = (end_datetime - start_datetime).days + 1
                     prev_start = start_datetime - pd.Timedelta(days=period_days)
                     prev_end = start_datetime - pd.Timedelta(seconds=1)
-                    prev_runs_mask = (runs_df['Date'] >= prev_start) & (runs_df['Date'] <= prev_end)
-                    prev_runs = runs_df[prev_runs_mask].copy()
+                    prev_runs_mask = (activities_df['Date'] >= prev_start) & (activities_df['Date'] <= prev_end)
+                    prev_runs = activities_df[prev_runs_mask].copy()
+
+                    # Apply same sport filter to previous period for accurate comparison
+                    if sport_filter != 'All' and 'sportType' in prev_runs.columns:
+                        prev_runs = prev_runs[prev_runs['sportType'] == sport_filter].copy()
 
                     # Cardio metrics
                     cardio_col1, cardio_col2, cardio_col3, cardio_col4, cardio_col5 = st.columns(5)
