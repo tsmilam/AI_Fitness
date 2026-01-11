@@ -11,8 +11,7 @@ import platform
 from dotenv import load_dotenv
 
 # 1. Load configuration immediately
-SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-load_dotenv(os.path.join(SCRIPT_DIR, ".env"))
+load_dotenv()
 
 # 2. Get the settings (with defaults for safety)
 # On Raspberry Pi/Linux: Set CHECK_MOUNT_STATUS=True in .env to enable mount verification
@@ -38,6 +37,7 @@ elif check_mount and is_windows:
 # ... rest of your code ...
 
 # --- CONFIGURATION VIA ENVIRONMENT ---
+load_dotenv()
 SAVE_PATH = os.getenv("SAVE_PATH")
 
 if SAVE_PATH:
@@ -46,7 +46,7 @@ else:
     print("WARNING: SAVE_PATH not set in .env. Using current folder.")
     CSV_FILE = "garmin_stats.csv"
 
-TOKEN_DIR = os.path.join(SCRIPT_DIR, ".garth")
+TOKEN_DIR = ".garth"
 # -------------------------------------
 
 def get_safe(data, *keys):
@@ -228,8 +228,13 @@ def main():
                     if measurements and len(measurements) > 0:
                         bp_systolic = get_safe(measurements[0], 'systolic')
                         bp_diastolic = get_safe(measurements[0], 'diastolic')
-        except:
-            pass
+
+                    # Fallback to summary high values
+                    if bp_systolic is None:
+                        bp_systolic = get_safe(summaries[0], 'highSystolic')
+                        bp_diastolic = get_safe(summaries[0], 'highDiastolic')
+        except Exception as e:
+            print(f"Blood pressure fetch error: {e}")
 
         # 7. Activities
         activity_str = ""
@@ -243,7 +248,7 @@ def main():
 
         # --- PREPARE ROW ---
         new_row = [
-            today, 
+            today,
             weight, muscle_mass, fat_pct, water_pct,
             sleep_total, sleep_deep, sleep_rem, sleep_score,
             rhr, min_hr, max_hr, stress_avg, respiration_avg, spo2_avg,
@@ -254,7 +259,7 @@ def main():
         ]
 
         headers = [
-            "Date", 
+            "Date",
             "Weight (lbs)", "Muscle Mass (lbs)", "Body Fat %", "Water %",
             "Sleep Total (hr)", "Sleep Deep (hr)", "Sleep REM (hr)", "Sleep Score",
             "RHR", "Min HR", "Max HR", "Avg Stress", "Respiration", "SpO2",
@@ -271,19 +276,45 @@ def main():
             os.makedirs(folder_path)
 
         file_exists = os.path.isfile(CSV_FILE)
-        
+        read_failed = False
+
+        def normalize_date(date_str):
+            """Normalize date string to ISO format for comparison"""
+            if not date_str:
+                return None
+            try:
+                # Try ISO format first (YYYY-MM-DD)
+                if '-' in date_str and len(date_str) == 10:
+                    return date_str
+                # Try US format (M/D/YYYY or MM/DD/YYYY)
+                if '/' in date_str:
+                    parts = date_str.split('/')
+                    if len(parts) == 3:
+                        month, day, year = parts
+                        return f"{year}-{int(month):02d}-{int(day):02d}"
+                return date_str
+            except:
+                return date_str
+
         if file_exists:
             try:
                 with open(CSV_FILE, mode='r', newline='') as f:
                     reader = csv.reader(f)
                     all_data = list(reader)
                     if all_data:
-                        rows = [row for row in all_data[1:] if row and row[0] != today]
+                        # Filter out rows for today's date (handles both formats)
+                        rows = [row for row in all_data[1:] if row and normalize_date(row[0]) != today]
             except Exception as e:
-                print(f"Warning reading existing CSV: {e}")
+                print(f"CRITICAL: Failed to read existing CSV: {e}")
+                print("Aborting to prevent data loss. Please check the file.")
+                read_failed = True
+
+        if read_failed:
+            return
 
         rows.append(new_row)
-        rows.sort(key=lambda x: x[0])
+        # Sort by normalized date (newest first)
+        rows.sort(key=lambda x: normalize_date(x[0]) if x else '', reverse=True)
 
         with open(CSV_FILE, mode='w', newline='') as f:
             writer = csv.writer(f)

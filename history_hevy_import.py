@@ -51,8 +51,25 @@ else:
     print("WARNING: SAVE_PATH not set in .env. Using current folder.")
     CSV_FILE = "hevy_stats.csv"
 
-# Optional: You can change this here, or add START_YEAR to .env if you prefer
-START_YEAR = 2023 
+# Parse command line arguments
+# Usage: python history_hevy_import.py [start_date] [--force]
+#   start_date: Optional start date (default: 2023-01-01)
+#   --force: Overwrite existing data with fresh Hevy data (re-sync all)
+DEFAULT_START_DATE = "2023-01-01"
+START_DATE = DEFAULT_START_DATE
+FORCE_MODE = False
+
+for arg in sys.argv[1:]:
+    if arg == "--force":
+        FORCE_MODE = True
+        print("FORCE MODE: Will overwrite existing data with fresh Hevy data")
+    elif not arg.startswith("-"):
+        START_DATE = arg
+        print(f"Using command-line start date: {START_DATE}")
+
+# Extract year for API filtering, but also use full date for precise filtering
+START_YEAR = int(START_DATE.split('-')[0])
+START_DATE_OBJ = datetime.fromisoformat(START_DATE)
 # -------------------------------------
 
 def main():
@@ -79,9 +96,31 @@ def main():
             print(f"Error creating folder: {e}")
             # We continue anyway, in case it's a root drive issue
             
-    # 2. Write Headers (if file is new)
+    # 2. Load existing data
     file_exists = os.path.isfile(CSV_FILE)
-    if not file_exists:
+    existing_entries = set()
+    existing_rows = []
+
+    if file_exists:
+        try:
+            with open(CSV_FILE, mode='r', newline='', encoding='utf-8') as f:
+                reader = csv.reader(f)
+                headers = next(reader, None)
+                for row in reader:
+                    if row:
+                        # Create unique key: date, workout, exercise, set number
+                        key = (row[0], row[1], row[2], row[3])
+                        existing_entries.add(key)
+                        existing_rows.append(row)
+            if FORCE_MODE:
+                print(f"   Found {len(existing_rows)} existing records (will overwrite)")
+                existing_rows = []
+                existing_entries = set()
+            else:
+                print(f"   Found {len(existing_rows)} existing records (will preserve)")
+        except Exception as e:
+            print(f"   Warning: Could not read existing file: {e}")
+    else:
         try:
             with open(CSV_FILE, mode='w', newline='', encoding='utf-8') as f:
                 writer = csv.writer(f)
@@ -91,23 +130,20 @@ def main():
             return
 
     page = 1
-    total_sets = 0
+    total_new = 0
     keep_going = True
-    
+    all_new_rows = list(existing_rows)  # Start with existing data
+
     # 3. Fetch Loop
     while keep_going:
         print(f"Fetching Page {page}...", end="", flush=True)
-        
+
         url = "https://api.hevyapp.com/v1/workouts"
         params = {"page": page, "pageSize": 10}
-        
+
         try:
             response = requests.get(url, headers=headers, params=params)
-            
-            if response.status_code == 404:
-                print(" Reached end of history (Page Not Found).")
-                break
-            
+
             if response.status_code != 200:
                 print(f"\nCRITICAL ERROR: {response.status_code}")
                 print(f"Server Message: {response.text}")
@@ -115,25 +151,25 @@ def main():
 
             data = response.json()
             workouts = data.get('workouts', [])
-            
+
             if not workouts:
                 print(" No more workouts found. Done.")
                 break
-                
-            new_rows = []
-            
+
+            page_rows = []
+
             for workout in workouts:
                 w_date_str = workout.get('start_time')
                 if not w_date_str: continue
 
                 w_dt = datetime.fromisoformat(w_date_str).replace(tzinfo=None)
-                
-                # Check Year Limit
-                if w_dt.year < START_YEAR:
-                    print(f"\nReached {w_dt.year}. Stopping.")
+
+                # Check Date Limit (stop if before start date)
+                if w_dt < START_DATE_OBJ:
+                    print(f"\nReached {w_dt.date()}. Stopping (before {START_DATE}).")
                     keep_going = False
                     break
-                
+
                 w_date_clean = w_dt.strftime("%Y-%m-%d")
                 w_title = workout.get('title', 'Unknown Workout')
 
@@ -141,13 +177,18 @@ def main():
                 for exercise in exercises:
                     ex_name = exercise.get('title', 'Unknown Exercise')
                     sets = exercise.get('sets', [])
-                    
+
                     for i, s in enumerate(sets):
                         # SAFE GETS
                         weight_kg = s.get('weight_kg', 0)
                         weight_lbs = round(weight_kg * 2.20462, 1) if weight_kg else 0
                         reps = s.get('reps', 0)
                         s_type = s.get('type', 'normal')
+
+                        # Skip if already exists (unless force mode)
+                        key = (w_date_clean, w_title, ex_name, str(i + 1))
+                        if key in existing_entries:
+                            continue
 
                         row = [
                             w_date_clean,
@@ -159,26 +200,33 @@ def main():
                             s.get('rpe', ''),
                             s_type
                         ]
-                        new_rows.append(row)
+                        page_rows.append(row)
+                        total_new += 1
 
-            # 4. Save to CSV
-            if new_rows:
-                with open(CSV_FILE, mode='a', newline='', encoding='utf-8') as f:
-                    writer = csv.writer(f)
-                    writer.writerows(new_rows)
-                print(f" Saved {len(new_rows)} sets.")
-                total_sets += len(new_rows)
+            if page_rows:
+                all_new_rows.extend(page_rows)
+                print(f" Found {len(page_rows)} new sets.")
             else:
                 print(" (Page empty).")
 
             page += 1
-            time.sleep(0.5) 
-            
+            time.sleep(0.5)
+
         except Exception as e:
             print(f"\nGlobal Error: {e}")
             break
 
-    print(f"--- COMPLETE. Total Sets Saved: {total_sets} ---")
+    # 4. Save to CSV (sorted newest to oldest)
+    if all_new_rows:
+        # Sort by date descending (newest first)
+        all_new_rows.sort(key=lambda x: x[0], reverse=True)
+        with open(CSV_FILE, mode='w', newline='', encoding='utf-8') as f:
+            writer = csv.writer(f)
+            writer.writerow(["Date", "Workout", "Exercise", "Set", "Weight (lbs)", "Reps", "RPE", "Type"])
+            writer.writerows(all_new_rows)
+        print(f"   Written {len(all_new_rows)} total records (sorted newest to oldest).")
+
+    print(f"--- COMPLETE. Added {total_new} new records. ---")
 
 if __name__ == "__main__":
     main()

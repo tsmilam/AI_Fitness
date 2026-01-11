@@ -33,7 +33,7 @@ else:
 # CSV file paths
 HEVY_STATS_FILE = os.path.join(SAVE_PATH, "hevy_stats.csv")
 GARMIN_STATS_FILE = os.path.join(SAVE_PATH, "garmin_stats.csv")
-GARMIN_CARDIO_FILE = os.path.join(SAVE_PATH, "garmin_cardio.csv")
+GARMIN_ACTIVITIES_FILE = os.path.join(SAVE_PATH, "garmin_activities.csv")
 HEVY_EXERCISES_FILE = os.path.join(SAVE_PATH, "HEVY APP exercises.csv")
 
 # Tracked Files & Commands (using environment-based paths)
@@ -44,17 +44,23 @@ TRACKED_FILES = {
         "sched": {"minute": 30},
         "command": f"cd {PROJECT_DIR} && /usr/bin/python3 daily_garmin_health.py >> {LOG_FILE} 2>&1"
     },
+    "Garmin Yesterday": {
+        "path": os.path.join(SAVE_PATH, "garmin_stats.csv"),
+        "interval": "daily",
+        "sched": {"hour": 6, "minute": 0},
+        "command": f"cd {PROJECT_DIR} && /usr/bin/python3 update_yesterday_garmin.py >> {LOG_FILE} 2>&1"
+    },
     "Hevy Workouts": {
         "path": os.path.join(SAVE_PATH, "hevy_stats.csv"),
         "interval": "hourly",
         "sched": {"minute": 35},
         "command": f"cd {PROJECT_DIR} && /usr/bin/python3 daily_hevy_workouts.py >> {LOG_FILE} 2>&1"
     },
-    "Garmin Cardio": {
-        "path": os.path.join(SAVE_PATH, "garmin_cardio.csv"),
+    "Garmin Activities": {
+        "path": os.path.join(SAVE_PATH, "garmin_activities.csv"),
         "interval": "hourly",
         "sched": {"minute": 40},
-        "command": f"cd {PROJECT_DIR} && /usr/bin/python3 daily_garmin_cardio.py >> {LOG_FILE} 2>&1"
+        "command": f"cd {PROJECT_DIR} && /usr/bin/python3 daily_garmin_activities.py >> {LOG_FILE} 2>&1"
     },
     "Hevy Ticker": {
         "path": os.path.join(os.path.dirname(PROJECT_DIR), "Hevy_Ticker", "ticker.log"),
@@ -194,17 +200,17 @@ def load_garmin_data():
 
 
 @st.cache_data(ttl=300)
-def load_garmin_cardio():
-    """Load Garmin cardio data."""
-    if not os.path.exists(GARMIN_CARDIO_FILE):
-        return pd.DataFrame()
+def load_garmin_activities():
+    """Load garmin activities data (running, cycling, swimming, etc.)"""
+    if not os.path.exists(GARMIN_ACTIVITIES_FILE):
+        return None
     try:
-        df = pd.read_csv(GARMIN_CARDIO_FILE)
+        df = pd.read_csv(GARMIN_ACTIVITIES_FILE)
         # Handle mixed date formats (ISO and US format)
         df['Date'] = pd.to_datetime(df['Date'], format='mixed', dayfirst=False)
         return df
     except Exception as e:
-        st.error(f"Error loading Garmin runs data: {e}")
+        st.error(f"Error loading Garmin activities data: {e}")
         return None
 
 
@@ -423,9 +429,43 @@ def get_next_run(interval, sched):
     return target
 
 
+def get_last_scheduled_run(interval, sched):
+    """Calculate when the task was last supposed to run"""
+    now = datetime.now()
+    if interval == 'hourly':
+        target = now.replace(minute=sched.get('minute', 0), second=0, microsecond=0)
+        if target > now:
+            target -= timedelta(hours=1)
+    elif interval == 'daily':
+        target = now.replace(hour=sched.get('hour', 0), minute=sched.get('minute', 0), second=0, microsecond=0)
+        if target > now:
+            target -= timedelta(days=1)
+    elif interval == 'weekly':
+        cron_dow = sched.get('dow', 0)
+        target_dow = (cron_dow - 1) % 7
+        target = now.replace(hour=sched.get('hour', 0), minute=sched.get('minute', 0), second=0, microsecond=0)
+        days_back = (now.weekday() - target_dow) % 7
+        target -= timedelta(days=days_back)
+        if target > now:
+            target -= timedelta(days=7)
+    elif interval == 'monthly':
+        target = now.replace(day=sched.get('day', 1), hour=sched.get('hour', 0),
+                            minute=sched.get('minute', 0), second=0, microsecond=0)
+        if target > now:
+            # Go back to previous month
+            if now.month == 1:
+                target = target.replace(year=now.year - 1, month=12)
+            else:
+                target = target.replace(month=now.month - 1)
+    else:
+        target = now
+    return target
+
+
 def analyze_task(name, config):
     filepath = config['path']
     interval = config['interval']
+    sched = config['sched']
 
     if filepath and os.path.exists(filepath):
         mod_ts = os.path.getmtime(filepath)
@@ -441,29 +481,52 @@ def analyze_task(name, config):
         seconds_ago = 999999999
         exists = False
 
-    status = "STALE"
-    color = "red"
+    # Calculate next and last scheduled run times
+    next_dt = get_next_run(interval, sched)
+    last_scheduled = get_last_scheduled_run(interval, sched)
 
-    if exists:
-        if interval == 'hourly':
-            if seconds_ago < 172800:
-                status, color = "UPDATED", "green"
-        elif interval == 'daily':
-            if seconds_ago < 259200:
-                status, color = "UPDATED", "green"
-        elif interval == 'weekly':
-            if seconds_ago < 1209600:
-                status, color = "UPDATED", "green"
-        elif interval == 'monthly':
-            if seconds_ago < 5184000:
-                status, color = "UPDATED", "green"
+    # Time since last scheduled run
+    time_since_scheduled = (datetime.now() - last_scheduled).total_seconds()
+
+    # Grace periods (in seconds)
+    GRACE_PERIOD = 24 * 3600  # 24 hours grace before "STALE"
+    OUTDATED_PERIOD = 48 * 3600  # 48 hours before "OUTDATED"
+
+    status = "STALE"
+    color = "orange"
+
+    # Special handling for Hevy Ticker (LED display process)
+    if name == "Hevy Ticker":
+        if not exists:
+            status, color = "NO LOG", "gray"
+        elif seconds_ago < 7200:  # Updated within 2 hours
+            status, color = "ACTIVE", "green"
+        elif seconds_ago < 14400:  # 2-4 hours
+            status, color = "CHECK", "orange"
+        else:  # More than 4 hours
+            status, color = "INACTIVE", "red"
+    # Standard scheduled task logic
+    elif exists:
+        # Did it run after the last scheduled time?
+        ran_on_schedule = dt_mod >= last_scheduled - timedelta(minutes=5)
+
+        if ran_on_schedule:
+            status, color = "UPDATED", "green"
+        elif time_since_scheduled < GRACE_PERIOD:
+            status, color = "WAITING", "blue"
+        elif time_since_scheduled < OUTDATED_PERIOD:
+            status, color = "STALE", "orange"
+        else:
+            status, color = "OUTDATED", "red"
     else:
         status = last_run_str
         color = "gray"
 
-    next_dt = get_next_run(interval, config['sched'])
+    # Format next run string
     if next_dt.date() == datetime.now().date():
         next_run_str = f"Today {next_dt.strftime('%H:%M')}"
+    elif next_dt.date() == (datetime.now() + timedelta(days=1)).date():
+        next_run_str = f"Tomorrow {next_dt.strftime('%H:%M')}"
     else:
         next_run_str = next_dt.strftime("%b %d %H:%M")
 
@@ -515,8 +578,10 @@ st.markdown("""
         border-radius: 8px;
         border: 1px solid #282c34;
     }
-    .status-updated { color: #4caf50; font-weight: bold; }
-    .status-stale { color: #f44336; font-weight: bold; }
+    .status-green { color: #4caf50; font-weight: bold; }
+    .status-blue { color: #2196f3; font-weight: bold; }
+    .status-orange { color: #ff9800; font-weight: bold; }
+    .status-red { color: #f44336; font-weight: bold; }
     .status-gray { color: #7f8c8d; font-weight: bold; }
 </style>
 """, unsafe_allow_html=True)
@@ -551,6 +616,17 @@ st.sidebar.info(f"Showing data from {start_date} to {end_date}")
 st.sidebar.markdown("---")
 st.sidebar.subheader("Chart Options")
 show_trend_lines = st.sidebar.checkbox("Show Trend Lines", value=True, help="Overlay smooth average trend lines on charts")
+
+# Mission Status filter
+st.sidebar.markdown("---")
+st.sidebar.subheader("Mission Status")
+all_tasks = list(TRACKED_FILES.keys())
+selected_tasks = st.sidebar.multiselect(
+    "Tasks to Display",
+    options=all_tasks,
+    default=all_tasks,
+    help="Select which tasks to show in Mission Status"
+)
 
 # --- MAIN CONTENT ---
 st.title("Fitness Command Center")
@@ -700,40 +776,146 @@ with tab1:
 
             # --- CARDIO SECTION ---
             st.markdown("---")
-            st.subheader("Cardio Training (Garmin Cardio)")
+            st.subheader("Cardio Training (All Activities)")
 
-            runs_df = load_garmin_cardio()
-            if runs_df is not None:
+            activities_df = load_garmin_activities()
+            if activities_df is not None:
+                # Sport filter and distance unit controls
+                filter_col1, filter_col2 = st.columns([1, 2])
+
+                with filter_col1:
+                    # Get available sport types from data
+                    if 'sportType' in activities_df.columns:
+                        available_sports = ['All'] + sorted(activities_df['sportType'].dropna().unique().tolist())
+                    else:
+                        available_sports = ['All']
+
+                    # Persist sport filter selection
+                    if 'sport_filter_preference' not in st.session_state:
+                        st.session_state.sport_filter_preference = "All"
+
+                    sport_filter = st.selectbox(
+                        "Sport Type",
+                        options=available_sports,
+                        index=available_sports.index(st.session_state.sport_filter_preference) if st.session_state.sport_filter_preference in available_sports else 0,
+                        key="sport_filter"
+                    )
+                    st.session_state.sport_filter_preference = sport_filter
+
+                with filter_col2:
+                    # Distance unit toggle (persists user selection)
+                    if 'distance_unit_preference' not in st.session_state:
+                        st.session_state.distance_unit_preference = "Miles"  # Default to Miles
+
+                    distance_unit = st.radio(
+                        "Distance Unit",
+                        options=["Kilometers", "Miles"],
+                        horizontal=True,
+                        index=0 if st.session_state.distance_unit_preference == "Kilometers" else 1,
+                        key="cardio_distance_unit"
+                    )
+                    st.session_state.distance_unit_preference = distance_unit
+
+                use_miles = distance_unit == "Miles"
+                km_to_miles = 0.621371
+
                 # Filter by date range
-                runs_mask = (runs_df['Date'] >= start_datetime) & (runs_df['Date'] <= end_datetime)
-                filtered_runs = runs_df[runs_mask].copy()
+                activities_mask = (activities_df['Date'] >= start_datetime) & (activities_df['Date'] <= end_datetime)
+                filtered_activities = activities_df[activities_mask].copy()
+
+                # Apply sport filter
+                if sport_filter != 'All' and 'sportType' in filtered_activities.columns:
+                    filtered_activities = filtered_activities[filtered_activities['sportType'] == sport_filter].copy()
+
+                # Rename for backward compatibility with existing code
+                filtered_runs = filtered_activities
 
                 if not filtered_runs.empty:
-                    # Cardio metrics - First row
-                    cardio_col1, cardio_col2, cardio_col3, cardio_col4 = st.columns(4)
+                    # Calculate previous period for comparison (trend arrows)
+                    period_days = (end_datetime - start_datetime).days + 1
+                    prev_start = start_datetime - pd.Timedelta(days=period_days)
+                    prev_end = start_datetime - pd.Timedelta(seconds=1)
+                    prev_runs_mask = (runs_df['Date'] >= prev_start) & (runs_df['Date'] <= prev_end)
+                    prev_runs = runs_df[prev_runs_mask].copy()
+
+                    # Cardio metrics
+                    cardio_col1, cardio_col2, cardio_col3, cardio_col4, cardio_col5 = st.columns(5)
 
                     total_runs = len(filtered_runs)
+                    prev_total_runs = len(prev_runs) if not prev_runs.empty else 0
+
                     # Calculate distance from speed and duration if distance column doesn't exist
                     if 'distance' in filtered_runs.columns:
-                        total_distance = filtered_runs['distance'].sum() / 1000  # Convert to km
+                        total_distance_km = filtered_runs['distance'].sum() / 1000
                     elif 'averageSpeed' in filtered_runs.columns and 'duration' in filtered_runs.columns:
-                        # distance = speed * time (speed in m/s, duration in seconds)
                         filtered_runs['distance_calc'] = filtered_runs['averageSpeed'] * filtered_runs['duration']
-                        total_distance = filtered_runs['distance_calc'].sum() / 1000  # Convert to km
+                        total_distance_km = filtered_runs['distance_calc'].sum() / 1000
                     else:
-                        total_distance = 0
+                        total_distance_km = 0
+
+                    # Previous period distance
+                    if not prev_runs.empty:
+                        if 'distance' in prev_runs.columns:
+                            prev_distance_km = prev_runs['distance'].sum() / 1000
+                        elif 'averageSpeed' in prev_runs.columns and 'duration' in prev_runs.columns:
+                            prev_runs['distance_calc'] = prev_runs['averageSpeed'] * prev_runs['duration']
+                            prev_distance_km = prev_runs['distance_calc'].sum() / 1000
+                        else:
+                            prev_distance_km = 0
+                    else:
+                        prev_distance_km = 0
+
+                    # Calculate average distance per run
+                    avg_distance_km = total_distance_km / total_runs if total_runs > 0 else 0
+                    prev_avg_distance_km = prev_distance_km / prev_total_runs if prev_total_runs > 0 else 0
 
                     avg_hr = filtered_runs['averageHR'].mean() if 'averageHR' in filtered_runs.columns else 0
-                    avg_duration = filtered_runs['duration'].mean() / 60 if 'duration' in filtered_runs.columns else 0  # Convert to minutes
+                    prev_avg_hr = prev_runs['averageHR'].mean() if not prev_runs.empty and 'averageHR' in prev_runs.columns else None
+
+                    avg_duration = filtered_runs['duration'].mean() / 60 if 'duration' in filtered_runs.columns else 0
+                    prev_avg_duration = prev_runs['duration'].mean() / 60 if not prev_runs.empty and 'duration' in prev_runs.columns else None
+
+                    # Convert to display units
+                    if use_miles:
+                        total_distance = total_distance_km * km_to_miles
+                        prev_distance = prev_distance_km * km_to_miles
+                        avg_distance = avg_distance_km * km_to_miles
+                        prev_avg_distance = prev_avg_distance_km * km_to_miles
+                        dist_unit = "mi"
+                    else:
+                        total_distance = total_distance_km
+                        prev_distance = prev_distance_km
+                        avg_distance = avg_distance_km
+                        prev_avg_distance = prev_avg_distance_km
+                        dist_unit = "km"
+
+                    # Calculate deltas
+                    delta_runs = total_runs - prev_total_runs if prev_total_runs > 0 else None
+                    delta_distance = total_distance - prev_distance if prev_distance > 0 else None
+                    delta_avg_distance = avg_distance - prev_avg_distance if prev_avg_distance > 0 else None
+                    delta_hr = avg_hr - prev_avg_hr if prev_avg_hr is not None and pd.notna(prev_avg_hr) else None
+                    delta_duration = avg_duration - prev_avg_duration if prev_avg_duration is not None and pd.notna(prev_avg_duration) else None
+
+                    # Context-aware labels based on sport type
+                    activity_label = "Activities" if sport_filter == "All" else sport_filter.title()
+                    single_label = "Activity" if sport_filter == "All" else sport_filter.title()
 
                     with cardio_col1:
-                        st.metric("Total Runs", total_runs)
+                        st.metric(f"Total {activity_label}", total_runs,
+                                 delta=f"{delta_runs:+d}" if delta_runs is not None else None)
                     with cardio_col2:
-                        st.metric("Total Distance", f"{total_distance:.1f} km")
+                        st.metric("Total Distance", f"{total_distance:.1f} {dist_unit}",
+                                 delta=f"{delta_distance:+.1f}" if delta_distance is not None else None)
                     with cardio_col3:
-                        st.metric("Avg Heart Rate", f"{avg_hr:.0f} bpm" if pd.notna(avg_hr) else "N/A")
+                        st.metric(f"Avg {single_label} Distance", f"{avg_distance:.2f} {dist_unit}",
+                                 delta=f"{delta_avg_distance:+.2f}" if delta_avg_distance is not None else None)
                     with cardio_col4:
-                        st.metric("Avg Duration", f"{avg_duration:.1f} min" if pd.notna(avg_duration) else "N/A")
+                        st.metric("Avg Heart Rate", f"{avg_hr:.0f} bpm" if pd.notna(avg_hr) else "N/A",
+                                 delta=f"{delta_hr:+.0f}" if delta_hr is not None else None,
+                                 delta_color="inverse")
+                    with cardio_col5:
+                        st.metric("Avg Duration", f"{avg_duration:.1f} min" if pd.notna(avg_duration) else "N/A",
+                                 delta=f"{delta_duration:+.1f}" if delta_duration is not None else None)
 
                     # Power metrics - Second row
                     power_col1, power_col2, power_col3, power_col4 = st.columns(4)
@@ -770,17 +952,22 @@ with tab1:
                         # Distance over time
                         if 'averageSpeed' in filtered_runs.columns and 'duration' in filtered_runs.columns:
                             filtered_runs['distance_km'] = (filtered_runs['averageSpeed'] * filtered_runs['duration']) / 1000
+                            if use_miles:
+                                filtered_runs['distance_display'] = filtered_runs['distance_km'] * km_to_miles
+                            else:
+                                filtered_runs['distance_display'] = filtered_runs['distance_km']
+                            chart_title = f"{activity_label} Distance Over Time" if sport_filter != "All" else "Activity Distance Over Time"
                             fig_distance = px.bar(
                                 filtered_runs,
                                 x='Date',
-                                y='distance_km',
-                                title="Running Distance Over Time",
+                                y='distance_display',
+                                title=chart_title,
                                 color='averageHR',
                                 color_continuous_scale='Reds'
                             )
                             fig_distance.update_layout(
                                 xaxis_title="Date",
-                                yaxis_title="Distance (km)",
+                                yaxis_title=f"Distance ({dist_unit})",
                                 template="plotly_dark",
                                 height=350
                             )
@@ -813,120 +1000,86 @@ with tab1:
                             )
                             st.plotly_chart(fig_zones, use_container_width=True)
 
-                    # Speed/Pace trend
+                    # Speed/Pace trend - context-aware based on sport type
                     if 'averageSpeed' in filtered_runs.columns:
-                        # Convert m/s to min/km (pace)
-                        filtered_runs['pace_min_km'] = 1000 / (filtered_runs['averageSpeed'] * 60)
-                        fig_pace = px.line(
-                            filtered_runs,
-                            x='Date',
-                            y='pace_min_km',
-                            markers=True,
-                            title="Running Pace Trend (lower is faster)"
-                        )
-                        fig_pace.update_layout(
-                            xaxis_title="Date",
-                            yaxis_title="Pace (min/km)",
-                            template="plotly_dark",
-                            height=300
-                        )
-                        fig_pace.update_traces(line_color='#e06c75', marker_color='#e5c07b')
-                        st.plotly_chart(fig_pace, use_container_width=True)
+                        # For cycling: show speed (km/h or mph)
+                        # For running/swimming: show pace (min/km or min/mi)
+                        is_cycling = sport_filter == 'cycling'
+                        is_swimming = sport_filter == 'swimming'
 
-                    # Power Progression Charts
-                    if 'avgPower' in filtered_runs.columns and filtered_runs['avgPower'].notna().any():
-                        st.subheader("Power Metrics")
-                        power_chart_col1, power_chart_col2 = st.columns(2)
-
-                        with power_chart_col1:
-                            # Power progression over time
-                            power_data = filtered_runs[filtered_runs['avgPower'].notna()].copy()
-                            if not power_data.empty:
-                                fig_power = go.Figure()
-
-                                # Average power line
-                                fig_power.add_trace(go.Scatter(
-                                    x=power_data['Date'],
-                                    y=power_data['avgPower'],
-                                    mode='lines+markers',
-                                    name='Avg Power',
-                                    line=dict(color='#61afef'),
-                                    marker=dict(color='#98c379')
-                                ))
-
-                                # Normalized power line
-                                if 'normPower' in power_data.columns and power_data['normPower'].notna().any():
-                                    fig_power.add_trace(go.Scatter(
-                                        x=power_data['Date'],
-                                        y=power_data['normPower'],
-                                        mode='lines+markers',
-                                        name='Norm Power',
-                                        line=dict(color='#e5c07b', dash='dash'),
-                                        marker=dict(color='#e06c75')
-                                    ))
-
-                                fig_power.update_layout(
-                                    title="Power Output Progression",
-                                    xaxis_title="Date",
-                                    yaxis_title="Power (Watts)",
-                                    template="plotly_dark",
-                                    height=350,
-                                    legend=dict(x=0.5, y=1.1, xanchor='center', orientation='h')
-                                )
-                                st.plotly_chart(fig_power, use_container_width=True)
-
-                        with power_chart_col2:
-                            # Power-to-Weight ratio over time if weight data available
-                            if garmin_df is not None and 'Weight (lbs)' in garmin_df.columns:
-                                power_data_with_weight = power_data.merge(
-                                    garmin_df[['Date', 'Weight (lbs)']].dropna(),
-                                    on='Date',
-                                    how='left'
-                                )
-                                # Fill forward weight data
-                                power_data_with_weight['Weight (lbs)'] = power_data_with_weight['Weight (lbs)'].fillna(method='ffill')
-                                power_data_with_weight['Weight (kg)'] = power_data_with_weight['Weight (lbs)'] * 0.453592
-                                power_data_with_weight['W/kg'] = power_data_with_weight['avgPower'] / power_data_with_weight['Weight (kg)']
-
-                                if power_data_with_weight['W/kg'].notna().any():
-                                    fig_wkg = go.Figure()
-
-                                    # W/kg line
-                                    fig_wkg.add_trace(go.Scatter(
-                                        x=power_data_with_weight['Date'],
-                                        y=power_data_with_weight['W/kg'],
-                                        mode='lines+markers',
-                                        name='Power/Weight',
-                                        line=dict(color='#c678dd'),
-                                        marker=dict(color='#56b6c2')
-                                    ))
-
-                                    # Add target line for Alpe du Zwift goal (2.3 W/kg)
-                                    fig_wkg.add_hline(
-                                        y=2.3,
-                                        line_dash="dash",
-                                        line_color="red",
-                                        annotation_text="Alpe Target (2.3 W/kg)",
-                                        annotation_position="right"
-                                    )
-
-                                    fig_wkg.update_layout(
-                                        title="Power-to-Weight Ratio (W/kg)",
-                                        xaxis_title="Date",
-                                        yaxis_title="W/kg",
-                                        template="plotly_dark",
-                                        height=350,
-                                        legend=dict(x=0.5, y=1.1, xanchor='center', orientation='h')
-                                    )
-                                    st.plotly_chart(fig_wkg, use_container_width=True)
-                                else:
-                                    st.info("Weight data needed to calculate power-to-weight ratio")
+                        if is_cycling:
+                            # Speed in km/h or mph
+                            filtered_runs['speed_kmh'] = filtered_runs['averageSpeed'] * 3.6  # m/s to km/h
+                            if use_miles:
+                                filtered_runs['speed_display'] = filtered_runs['speed_kmh'] * km_to_miles
+                                speed_unit = "mph"
                             else:
-                                st.info("Weight data needed to calculate power-to-weight ratio")
+                                filtered_runs['speed_display'] = filtered_runs['speed_kmh']
+                                speed_unit = "km/h"
+
+                            fig_speed = px.line(
+                                filtered_runs,
+                                x='Date',
+                                y='speed_display',
+                                markers=True,
+                                title="Cycling Speed Trend (higher is faster)"
+                            )
+                            fig_speed.update_layout(
+                                xaxis_title="Date",
+                                yaxis_title=f"Speed ({speed_unit})",
+                                template="plotly_dark",
+                                height=300
+                            )
+                            fig_speed.update_traces(line_color='#61afef', marker_color='#e5c07b')
+                            st.plotly_chart(fig_speed, use_container_width=True)
+
+                            # Show power chart for cycling if available
+                            if 'avgPower' in filtered_runs.columns and filtered_runs['avgPower'].notna().any():
+                                fig_power = px.line(
+                                    filtered_runs,
+                                    x='Date',
+                                    y='avgPower',
+                                    markers=True,
+                                    title="Cycling Power Trend"
+                                )
+                                fig_power.update_layout(
+                                    xaxis_title="Date",
+                                    yaxis_title="Avg Power (Watts)",
+                                    template="plotly_dark",
+                                    height=300
+                                )
+                                fig_power.update_traces(line_color='#c678dd', marker_color='#e5c07b')
+                                st.plotly_chart(fig_power, use_container_width=True)
+                        else:
+                            # Pace for running/swimming/other
+                            filtered_runs['pace_min_km'] = 1000 / (filtered_runs['averageSpeed'] * 60)
+                            if use_miles:
+                                filtered_runs['pace_display'] = filtered_runs['pace_min_km'] * 1.60934
+                                pace_unit = "min/mi"
+                            else:
+                                filtered_runs['pace_display'] = filtered_runs['pace_min_km']
+                                pace_unit = "min/km"
+
+                            pace_title = f"{single_label} Pace Trend (lower is faster)" if sport_filter != "All" else "Pace Trend (lower is faster)"
+                            fig_pace = px.line(
+                                filtered_runs,
+                                x='Date',
+                                y='pace_display',
+                                markers=True,
+                                title=pace_title
+                            )
+                            fig_pace.update_layout(
+                                xaxis_title="Date",
+                                yaxis_title=f"Pace ({pace_unit})",
+                                template="plotly_dark",
+                                height=300
+                            )
+                            fig_pace.update_traces(line_color='#e06c75', marker_color='#e5c07b')
+                            st.plotly_chart(fig_pace, use_container_width=True)
                 else:
-                    st.info("No running data found for the selected date range.")
+                    st.info(f"No {activity_label.lower()} found for the selected date range.")
             else:
-                st.info("Garmin runs data file not found.")
+                st.info("Garmin activities data file not found. Run 'daily_garmin_activities.py' or import history.")
 
 
 # --- TAB 2: Recovery (Garmin) ---
@@ -1179,15 +1332,20 @@ with tab3:
     # Mission Status
     st.header("Mission Status")
 
-    tasks = [analyze_task(name, conf) for name, conf in TRACKED_FILES.items()]
+    # Filter tasks based on sidebar selection
+    filtered_tracked = {k: v for k, v in TRACKED_FILES.items() if k in selected_tasks}
+    tasks = [analyze_task(name, conf) for name, conf in filtered_tracked.items()]
 
-    # Create task table
-    task_cols = st.columns([2, 2, 2, 1, 1])
-    task_cols[0].markdown("**Task**")
-    task_cols[1].markdown("**Last Update**")
-    task_cols[2].markdown("**Next Run**")
-    task_cols[3].markdown("**Status**")
-    task_cols[4].markdown("**Action**")
+    if not tasks:
+        st.info("No tasks selected. Use the sidebar to choose which tasks to display.")
+    else:
+        # Create task table
+        task_cols = st.columns([2, 2, 2, 1, 1])
+        task_cols[0].markdown("**Task**")
+        task_cols[1].markdown("**Last Update**")
+        task_cols[2].markdown("**Next Run**")
+        task_cols[3].markdown("**Status**")
+        task_cols[4].markdown("**Action**")
 
     for task in tasks:
         cols = st.columns([2, 2, 2, 1, 1])
@@ -1195,15 +1353,9 @@ with tab3:
         cols[1].write(task['last_run'])
         cols[2].write(task['next_run'])
 
-        if task['color'] == 'green':
-            cols[3].markdown(f"<span class='status-updated'>{task['status']}</span>",
-                             unsafe_allow_html=True)
-        elif task['color'] == 'red':
-            cols[3].markdown(f"<span class='status-stale'>{task['status']}</span>",
-                             unsafe_allow_html=True)
-        else:
-            cols[3].markdown(f"<span class='status-gray'>{task['status']}</span>",
-                             unsafe_allow_html=True)
+        # Use color class directly from task
+        cols[3].markdown(f"<span class='status-{task['color']}'>{task['status']}</span>",
+                         unsafe_allow_html=True)
 
         if cols[4].button("Run", key=f"run_{task['name']}"):
             if task['command']:
@@ -1234,43 +1386,59 @@ with tab3:
         st.markdown(f"**Selected:** {history_start_date.isoformat()}")
         st.caption("Data will be imported from this date to yesterday.")
 
+    # Import options
+    force_refresh = st.checkbox(
+        "Force Refresh (overwrite existing data)",
+        value=False,
+        help="Re-sync with Garmin/Hevy even if data already exists. Use this to fix incomplete step counts."
+    )
+
+    # Help text for users
+    if force_refresh:
+        st.warning("**Force Mode ON:** All existing data in the date range will be replaced with fresh data from Garmin/Hevy.")
+    else:
+        st.info("**Normal Mode:** Only new dates will be added. Existing records are preserved. Enable 'Force Refresh' to re-sync and fix incomplete data (e.g., step counts captured too early in the day).")
+
     # History import buttons
     hist_col1, hist_col2, hist_col3, hist_col4 = st.columns(4)
 
     history_date_str = history_start_date.isoformat()
+    force_flag = " --force" if force_refresh else ""
+
+    mode_label = " [FORCE]" if force_refresh else ""
 
     with hist_col1:
         if st.button("Import Garmin Health", key="run_history_garmin"):
-            cmd = f"cd {PROJECT_DIR} && /usr/bin/python3 history_garmin_import.py {history_date_str} >> {LOG_FILE} 2>&1"
+            cmd = f"cd {PROJECT_DIR} && /usr/bin/python3 history_garmin_import.py {history_date_str}{force_flag} >> {LOG_FILE} 2>&1"
             subprocess.Popen(cmd, shell=True)
-            st.toast(f"Started: Garmin Health History (from {history_date_str})")
-            st.success("Garmin Health import started! Check logs for progress.")
+            st.toast(f"Started: Garmin Health History{mode_label}")
+            st.success(f"Garmin Health import started{mode_label}! Check logs for progress.")
 
     with hist_col2:
-        if st.button("Import Garmin Cardio", key="run_history_cardio"):
-            cmd = f"cd {PROJECT_DIR} && /usr/bin/python3 history_garmin_cardio.py {history_date_str} >> {LOG_FILE} 2>&1"
-            run_background_task(cmd)
-            st.toast(f"Started: Garmin Cardio History (from {history_date_str})")
-            st.success("Garmin Cardio import started! Check logs for progress.")
+        if st.button("Import Garmin Activities", key="run_history_activities"):
+            cmd = f"cd {PROJECT_DIR} && /usr/bin/python3 history_garmin_activities.py {history_date_str}{force_flag} >> {LOG_FILE} 2>&1"
+            subprocess.Popen(cmd, shell=True)
+            st.toast(f"Started: Garmin Activities History{mode_label}")
+            st.success(f"Garmin Activities import started{mode_label}! Check logs for progress.")
 
     with hist_col3:
         if st.button("Import Hevy Workouts", key="run_history_hevy"):
-            cmd = f"cd {PROJECT_DIR} && /usr/bin/python3 history_hevy_import.py {history_date_str} >> {LOG_FILE} 2>&1"
+            cmd = f"cd {PROJECT_DIR} && /usr/bin/python3 history_hevy_import.py {history_date_str}{force_flag} >> {LOG_FILE} 2>&1"
             subprocess.Popen(cmd, shell=True)
-            st.toast(f"Started: Hevy History (from {history_date_str})")
-            st.success("Hevy Workouts import started! Check logs for progress.")
+            st.toast(f"Started: Hevy History{mode_label}")
+            st.success(f"Hevy Workouts import started{mode_label}! Check logs for progress.")
 
     with hist_col4:
         if st.button("Run All Imports", type="primary", key="run_all_history"):
             # Run all three imports
-            cmd1 = f"cd {PROJECT_DIR} && /usr/bin/python3 history_garmin_import.py {history_date_str} >> {LOG_FILE} 2>&1"
-            cmd2 = f"cd {PROJECT_DIR} && /usr/bin/python3 history_garmin_cardio.py {history_date_str} >> {LOG_FILE} 2>&1"
-            cmd3 = f"cd {PROJECT_DIR} && /usr/bin/python3 history_hevy_import.py {history_date_str} >> {LOG_FILE} 2>&1"
+            cmd1 = f"cd {PROJECT_DIR} && /usr/bin/python3 history_garmin_import.py {history_date_str}{force_flag} >> {LOG_FILE} 2>&1"
+            cmd2 = f"cd {PROJECT_DIR} && /usr/bin/python3 history_garmin_activities.py {history_date_str}{force_flag} >> {LOG_FILE} 2>&1"
+            cmd3 = f"cd {PROJECT_DIR} && /usr/bin/python3 history_hevy_import.py {history_date_str}{force_flag} >> {LOG_FILE} 2>&1"
             subprocess.Popen(cmd1, shell=True)
             subprocess.Popen(cmd2, shell=True)
             subprocess.Popen(cmd3, shell=True)
-            st.toast(f"Started: All History Imports (from {history_date_str})")
-            st.success("All imports started! Check logs for progress.")
+            st.toast(f"Started: All History Imports{mode_label}")
+            st.success(f"All imports started{mode_label}! Check logs for progress.")
 
     st.markdown("---")
 
